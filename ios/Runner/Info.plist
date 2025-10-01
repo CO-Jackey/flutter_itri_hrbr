@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -24,6 +26,22 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>此應用程式需要使用藍牙以連接並與外部裝置（例如心率感測器或配件）通訊，提供應用的核心功能。</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>此應用程式需要使用藍牙周邊功能以與其他裝置互動並傳送/接收資料。</string>
+	<!-- 新增：定位用途說明，App Store 會要求這兩個 key -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>此應用程式需要在使用期間存取您的位置，以便掃描並連接附近的藍牙裝置，並提供與裝置位置相關的功能。</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>此應用程式需要在前景與背景持續存取位置，以支援背景藍牙連線與穩定的裝置同步（例如持續監測和維持與外部配件的連線）。</string>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -41,9 +59,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
-	<key>UIApplicationSupportsIndirectInputEvents</key>
-	<true/>
 </dict>
 </plist>
