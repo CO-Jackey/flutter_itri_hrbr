@@ -352,15 +352,40 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
 
         if (!_ref.mounted) return;
 
-        _ref
+        if (value.isEmpty || value.length < 17) {
+          return;
+        }
+
+        final dataType = _ref
             .read(mutiFilteredFirstRawDataFamily(device.remoteId).notifier)
             .mutiFilterData(value, device.remoteId, _ref);
 
+        if (dataType != DataType.first) {
+          devLog('dataType', 'dataType = $dataType 忽略資料');
+          return; // 忽略第一筆資料
+        }
         final dataValue = _ref.read(
           mutiFilteredFirstRawDataFamily(device.remoteId),
         );
 
+        // ✅ 第二層檢查：篩選後的資料（這是關鍵！）
+        if (dataValue.splitRawData.isEmpty ||
+            dataValue.splitRawData.length < 17) {
+          devLog(
+            '數據過濾',
+            '⚠️ 篩選後資料為空或長度不足 (${dataValue.splitRawData.length})，已忽略',
+          );
+          return; // 🔥 直接返回，不送給 SDK
+        }
+
+        // ✅ 確認資料有效後才送給 SDK
+        devLog(
+          'SDK送出',
+          '資料長度=${dataValue.splitRawData.length}, 內容=${dataValue.splitRawData}',
+        );
+
         await calc.splitPackage(Uint8List.fromList(dataValue.splitRawData));
+
         if (!_ref.mounted) return;
 
         // 創建 HealthData 物件並加入待處理佇列

@@ -1,0 +1,11 @@
+framework module ITRIHRBR {
+  umbrella header "ITRIHRBR.h"
+  export *
+
+  module * { export * }
+}
+
+module ITRIHRBR.Swift {
+  header "ITRIHRBR-Swift.h"
+  requires objc
+}

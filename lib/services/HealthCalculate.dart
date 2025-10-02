@@ -37,6 +37,12 @@ class HealthCalculate {
 
   /// 將從藍牙收到的數據包發送到原生端進行解析
   Future<void> splitPackage(Uint8List data) async {
+    // 🔥 增加檢查
+    if (data.isEmpty || data.length < 17) {
+      devLog('HealthCalculate', '⚠️ 收到不完整資料 (長度: ${data.length})，已忽略');
+      return;
+    }
+
     try {
       // 呼叫原生端的 'splitPackage' 方法，並傳遞 byte array
       // invokeMapMethod 會等待原生端返回一個 Map

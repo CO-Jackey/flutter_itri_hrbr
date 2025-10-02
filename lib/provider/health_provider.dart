@@ -147,7 +147,11 @@ class HealthDataNotifier extends StateNotifier<HealthData> {
     DeviceIdentifier deviceId,
     Ref ref,
   ) {
-    // 長度不足：當成無法判斷，直接丟 second 並記錄
+    // 🔥 在分類前先檢查
+    if (splitRawData.isEmpty || splitRawData.length < 17) {
+      devLog('mutiFilterData', '⚠️ 收到空資料或長度不足，直接返回 unknown');
+      return DataType.unknown;
+    }
 
     final dataType = ref
         .read(dataClassifierProvider)

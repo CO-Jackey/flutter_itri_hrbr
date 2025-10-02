@@ -1,0 +1,41 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.1 effective-5.10 (swiftlang-6.1.0.110.21 clang-1700.0.13.3)
+// swift-module-flags: -target arm64-apple-ios14.0 -enable-objc-interop -enable-library-evolution -swift-version 5 -enforce-exclusivity=checked -Onone -enable-experimental-feature DebugDescriptionMacro -enable-bare-slash-regex -module-name ITRIHRBR
+// swift-module-flags-ignorable: -no-verify-emitted-module-interface -interface-compiler-version 6.1
+import CoreBluetooth
+import Foundation
+@_exported import ITRIHRBR
+import Swift
+import UIKit
+import _Concurrency
+import _StringProcessing
+import _SwiftConcurrencyShims
+public struct HRBRData {
+  public var TimeStamp: Swift.Int64
+  public var HRValue: Swift.Int
+  public var BRValue: Swift.Int
+  public var lastIndex: Swift.Int
+  public var PowerValue: Swift.Int
+  public var StepValue: Swift.Int
+  public var RRIValue: Swift.Int
+  public var HumValue: Swift.Int
+  public var TempValue: Swift.Double
+  public var GyroValueX: Swift.Int, GyroValueY: Swift.Int, GyroValueZ: Swift.Int
+  public var isWearing: Swift.Bool
+  public var PetPose: Swift.Int
+  public var m_HRdoubleRawdata: [Swift.UInt16]
+  public var m_HRdoubleRawOut: [Swift.Double]
+  public var m_DrawHRRawdata: [Swift.Double]
+  public var m_BRdoubleRawdata: [Swift.UInt16]
+  public var m_BRdoubleRawOut: [Swift.Double]
+  public var m_DrawBRRawdata: [Swift.Double]
+  public var fft_array: [Swift.Double]
+}
+public class HRBRCalculate {
+  public var hrbrData: ITRIHRBR.HRBRData
+  public init(index: Swift.Int)
+  public func setType(type: Swift.Int)
+  public func setBRThreshold(threshold: Swift.Int)
+  public func splitPackage(data: [Swift.UInt8]) -> Swift.Int
+  @objc deinit
+}
