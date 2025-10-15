@@ -7,9 +7,7 @@ final perDeviceHealthProvider =
     StateNotifierProvider<
       PerDeviceHealthNotifier,
       Map<DeviceIdentifier, HealthData>
-    >(
-      (ref) => PerDeviceHealthNotifier(),
-    );
+    >((ref) => PerDeviceHealthNotifier());
 
 /// 建立一個「全 0 / 空」的預設 HealthData
 /// 依你的 HealthData 建構子參數名稱調整 (若名稱不同請同步修改)

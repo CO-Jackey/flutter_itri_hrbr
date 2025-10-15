@@ -8,7 +8,8 @@ import 'package:flutter_itri_hrbr/helper/devLog.dart';
 import 'package:flutter_itri_hrbr/model/health_data.dart';
 import 'package:flutter_itri_hrbr/provider/health_provider.dart';
 import 'package:flutter_itri_hrbr/provider/per_device_health_provider.dart';
-import 'package:flutter_itri_hrbr/services/HealthCalculate.dart';
+import 'package:flutter_itri_hrbr/services/HealthCalculate_Device_ID.dart';
+import 'package:flutter_itri_hrbr/services/batch_data_processor.dart';
 import 'package:flutter_itri_hrbr/services/data_Classifier_Service.dart';
 import 'package:flutter_itri_hrbr/utils/performance_monitor.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,7 +18,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 /// 定義藍牙管理器需要維護的所有狀態
-class BluetoothMultiConnectionState {
+class BluetoothISOMultiConnectionState {
   /// 使用 Map 來儲存所有已連線的裝置，以 deviceId 為 key
   final Map<DeviceIdentifier, BluetoothDevice> connectedDevices;
 
@@ -27,19 +28,19 @@ class BluetoothMultiConnectionState {
   /// 是否正在掃描
   final bool isScanning;
 
-  const BluetoothMultiConnectionState({
+  const BluetoothISOMultiConnectionState({
     this.connectedDevices = const {},
     this.scanResults = const [],
     this.isScanning = false,
   });
 
   /// 方便複製並更新狀態的 copyWith 方法
-  BluetoothMultiConnectionState copyWith({
+  BluetoothISOMultiConnectionState copyWith({
     Map<DeviceIdentifier, BluetoothDevice>? connectedDevices,
     List<ScanResult>? scanResults,
     bool? isScanning,
   }) {
-    return BluetoothMultiConnectionState(
+    return BluetoothISOMultiConnectionState(
       connectedDevices: connectedDevices ?? this.connectedDevices,
       scanResults: scanResults ?? this.scanResults,
       isScanning: isScanning ?? this.isScanning,
@@ -49,27 +50,33 @@ class BluetoothMultiConnectionState {
 
 /// Riverpod Provider，讓 App 的任何地方都能取用我們的 BluetoothManager
 final bluetoothManagerProvider =
-    StateNotifierProvider<BluetoothManager, BluetoothMultiConnectionState>((
+    StateNotifierProvider<
+      BluetoothISOManager,
+      BluetoothISOMultiConnectionState
+    >((
       ref,
     ) {
-      final manager = BluetoothManager(ref);
+      final manager = BluetoothISOManager(ref);
       ref.onDispose(manager.cleanup);
       return manager;
     });
 
 /// 藍牙「大腦」：負責所有藍牙相關的狀態與邏輯，完全獨立於 UI
-class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
-  BluetoothManager(this._ref) : super(const BluetoothMultiConnectionState()) {
+class BluetoothISOManager
+    extends StateNotifier<BluetoothISOMultiConnectionState> {
+  BluetoothISOManager(this._ref)
+    : super(const BluetoothISOMultiConnectionState()) {
     _initBluetoothStateListener();
+    _initBatchProcessor(); // ✅ 新增
   }
 
   final Ref _ref;
 
-  // NEW: 每裝置一個 HealthCalculate
-  final Map<DeviceIdentifier, HealthCalculate> _calculators = {};
+  // NEW: 每裝置一個 HealthCalculateDeviceID
+  final Map<DeviceIdentifier, HealthCalculateDeviceID> _calculators = {};
 
-  HealthCalculate _getCalculator(DeviceIdentifier id) {
-    return _calculators.putIfAbsent(id, () => HealthCalculate(3));
+  HealthCalculateDeviceID _getCalculator(DeviceIdentifier id) {
+    return _calculators.putIfAbsent(id, () => HealthCalculateDeviceID(3));
   }
 
   // 連線狀態監聽
@@ -98,7 +105,16 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
   // 掃描計時器
   Timer? _scanTimer;
 
-  HealthCalculate? _healthCalculator;
+  HealthCalculateDeviceID? _healthCalculator;
+
+  // ✅ 新增批次處理器
+  BatchDataProcessor? _batchProcessor;
+  StreamSubscription? _batchSubscription;
+  StreamSubscription? _statsSubscription;
+
+  // 在 BluetoothISOManager 類別中新增
+  final Map<DeviceIdentifier, DateTime> _lastUIUpdate = {};
+  static const _uiUpdateInterval = Duration(milliseconds: 100); // 1Hz 更新
 
   // 取得資料的 helper
   List<int>? getNotifyValue(DeviceIdentifier id, Guid uuid) =>
@@ -141,6 +157,142 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
   }
 
   //-------------------------------------
+
+  // ✅ 新增：初始化批次處理器
+  Future<void> _initBatchProcessor() async {
+    // ✅ 防止重複初始化
+    if (_batchProcessor != null) {
+      devLog('批次處理器', '⚠️ 已存在，跳過重複初始化');
+      return;
+    }
+
+    _batchProcessor = BatchDataProcessor();
+
+    // 啟動 Isolate,設定批次參數
+    await _batchProcessor!.start(
+      batchInterval: Duration(milliseconds: 100),
+      batchSize: 10,
+    );
+
+    // 監聽批次資料
+    _batchSubscription = _batchProcessor!.batchStream.listen((batches) {
+      _processBatches(batches);
+    });
+
+    // 監聽統計資訊(可選,用於除錯)
+    _statsSubscription = _batchProcessor!.statsStream.listen((stats) {
+      devLog(
+        '批次統計',
+        '收到: ${stats['totalReceived']}, '
+            '已處理: ${stats['totalSent']}, '
+            '緩衝: ${stats['buffered']}, '
+            '設備數: ${stats['devices']}',
+      );
+    });
+
+    devLog('批次處理器', '✅ 初始化完成');
+  }
+
+  /// ✅ 修改：批次處理方法
+  Future<void> _processBatches(
+    Map<String, List<BatchDataItem>> batches,
+  ) async {
+    final processingStart = DateTime.now();
+
+    devLog('批次處理', '收到批次：${batches.length} 個設備');
+
+    // 清空待更新列表
+    _pendingHealthUpdates.clear();
+
+    for (final entry in batches.entries) {
+      final deviceIdStr = entry.key;
+      final dataItems = entry.value;
+
+      devLog('批次處理', '  - $deviceIdStr: ${dataItems.length} 筆資料');
+
+      // 找到對應的設備
+      final deviceId = DeviceIdentifier(deviceIdStr);
+
+      if (!_calculators.containsKey(deviceId)) {
+        devLog('批次處理', '  ⚠️  找不到 calculator: $deviceIdStr');
+        continue;
+      }
+
+      final calc = _calculators[deviceId]!;
+
+      // ✅ 關鍵改動：改用非同步呼叫（不阻塞主線程）
+      for (final item in dataItems) {
+        try {
+          // ⚡ 使用 unawaited 避免阻塞
+          // 傳入 deviceId 確保數據不會錯亂
+
+          unawaited(
+            calc.splitPackage(
+              Uint8List.fromList(item.bytes),
+              deviceId.toString(), // ← 傳入設備 ID
+            ),
+          );
+        } catch (e) {
+          devLog('批次處理錯誤', '$deviceIdStr: $e');
+        }
+      }
+
+      // ✅ 檢查是否該更新 UI（節流機制）
+      final now = DateTime.now();
+      final lastUpdate = _lastUIUpdate[deviceId];
+
+      if (lastUpdate == null ||
+          now.difference(lastUpdate) >= _uiUpdateInterval) {
+        // 🔥 重要：這裡取得的是 SDK 累積後的結果
+        // SDK 會在累積 16 筆後才開始輸出有效數據
+        _pendingHealthUpdates[deviceId] = HealthData(
+          splitRawData: dataItems.last.bytes,
+          hr: calc.getHRValue() ?? 0,
+          br: calc.getBRValue() ?? 0,
+          gyroX: calc.getGyroValueX() ?? 0,
+          gyroY: calc.getGyroValueY() ?? 0,
+          gyroZ: calc.getGyroValueZ() ?? 0,
+          temp: (calc.getTempValue() is num)
+              ? (calc.getTempValue() as num).toDouble()
+              : 0.0,
+          hum: (calc.getHumValue() is num)
+              ? (calc.getHumValue() as num).toDouble()
+              : 0.0,
+          spO2: calc.getSpO2Value() ?? 0,
+          step: calc.getStepValue() ?? 0,
+          power: calc.getPowerValue() ?? 0,
+          time: calc.getTimeStamp() ?? 0,
+          hrFiltered: calc.getHRFiltered() ?? [],
+          brFiltered: calc.getBRFiltered() ?? [],
+          isWearing: calc.getIsWearing() == 1 || calc.getIsWearing() == true,
+          rawData: calc.getRawData() ?? [],
+          type: calc.getType() ?? 0,
+          fftOut: calc.getFFTOut() ?? [],
+          petPose: calc.getPetPoseValue(),
+        );
+
+        _lastUIUpdate[deviceId] = now;
+      }
+    }
+
+    // ✅ 批次更新所有需要更新的設備（只觸發一次 rebuild）
+    if (_pendingHealthUpdates.isNotEmpty) {
+      _ref
+          .read(perDeviceHealthProvider.notifier)
+          .batchUpdate(_pendingHealthUpdates);
+
+      final processingTime = DateTime.now()
+          .difference(processingStart)
+          .inMilliseconds;
+      devLog(
+        '批次處理',
+        '✅ 完成：${_pendingHealthUpdates.length} 個設備, '
+            '耗時: ${processingTime}ms',
+      );
+
+      _pendingHealthUpdates.clear();
+    }
+  }
 
   /// 初始化藍牙狀態監聽器
   void _initBluetoothStateListener() {
@@ -345,13 +497,15 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
       return;
     }
 
-    // 在 toggleNotify 中
+    // // 在 toggleNotify 中
     // int callCount = 0;
     // final totalStopwatch = Stopwatch(); // 總時間
 
     try {
       await c.setNotifyValue(true);
+
       final calc = _getCalculator(device.remoteId);
+
       final sub = c.lastValueStream.listen((value) async {
         // callCount++;
 
@@ -359,41 +513,42 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
 
         if (!_ref.mounted) return;
 
+        // ✅ 第一層檢查：原始資料
         if (value.isEmpty || value.length < 17) {
           return;
         }
 
+        // ✅ 資料篩選（保留你原有的邏輯）
         final dataType = _ref
             .read(mutiFilteredFirstRawDataFamily(device.remoteId).notifier)
             .mutiFilterData(value, device.remoteId, _ref);
 
         if (dataType != DataType.first) {
           devLog('dataType', 'dataType = $dataType 忽略資料');
-          return; // 忽略第一筆資料
+          return;
         }
+
         final dataValue = _ref.read(
           mutiFilteredFirstRawDataFamily(device.remoteId),
         );
 
-        // ✅ 第二層檢查：篩選後的資料（這是關鍵！）
+        // ✅ 第二層檢查：篩選後的資料
         if (dataValue.splitRawData.isEmpty ||
             dataValue.splitRawData.length < 17) {
           devLog(
             '數據過濾',
             '⚠️ 篩選後資料為空或長度不足 (${dataValue.splitRawData.length})，已忽略',
           );
-          return; // 🔥 直接返回，不送給 SDK
+          return;
         }
-
-        // ✅ 確認資料有效後才送給 SDK
-        devLog(
-          'SDK送出',
-          '資料長度=${dataValue.splitRawData.length}, 內容=${dataValue.splitRawData}',
-        );
 
         // final singleCallStopwatch = Stopwatch()..start();
 
-        await calc.splitPackage(Uint8List.fromList(dataValue.splitRawData));
+        // ✅✅✅ 關鍵改動：不再立即處理，而是轉發給 Isolate
+        _batchProcessor?.addData(
+          device.remoteId.toString(),
+          dataValue.splitRawData,
+        );
 
         // singleCallStopwatch.stop();
 
@@ -402,96 +557,12 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
         //   '第$callCount次: ${singleCallStopwatch.elapsedMilliseconds}ms',
         // );
 
-        // 統計
-        // if (callCount % 100 == 0) {
-        //   devLog(
-        //     '效能',
-        //     '100次平均: ${totalStopwatch.elapsedMilliseconds / 100}ms',
-        //   );
-        //   totalStopwatch.reset();
-        // }
-
-        if (!_ref.mounted) return;
-
-        // 創建 HealthData 物件並加入待處理佇列
-        _pendingHealthUpdates[device.remoteId] = HealthData(
-          splitRawData: dataValue.splitRawData,
-          hr: calc.getHRValue() ?? 0,
-          br: calc.getBRValue() ?? 0,
-          gyroX: calc.getGyroValueX() ?? 0,
-          gyroY: calc.getGyroValueY() ?? 0,
-          gyroZ: calc.getGyroValueZ() ?? 0,
-          temp: (calc.getTempValue() is num)
-              ? (calc.getTempValue() as num).toDouble()
-              : 0.0,
-          hum: (calc.getHumValue() is num)
-              ? (calc.getHumValue() as num).toDouble()
-              : 0.0,
-          spO2: calc.getSpO2Value() ?? 0,
-          step: calc.getStepValue() ?? 0,
-          power: calc.getPowerValue() ?? 0,
-          time: calc.getTimeStamp() ?? 0,
-          hrFiltered: calc.getHRFiltered() ?? [],
-          brFiltered: calc.getBRFiltered() ?? [],
-          isWearing: calc.getIsWearing() == 1 || calc.getIsWearing() == true,
-          rawData: calc.getRawData() ?? [],
-          type: calc.getType() ?? 0,
-          fftOut: calc.getFFTOut() ?? [],
-          petPose: calc.getPetPoseValue(),
-        );
-
-        _hasPendingStateUpdate = true;
-
-        _scheduleBatchUpdate();
-
-        // _ref
-        //     .read(perDeviceHealthProvider.notifier)
-        //     .patchDevice(
-        //       id: device.remoteId,
-        //       hr: calc.getHRValue(),
-        //       br: calc.getBRValue(),
-        //       gyroX: calc.getGyroValueX(),
-        //       gyroY: calc.getGyroValueY(),
-        //       gyroZ: calc.getGyroValueZ(),
-        //       temp: (calc.getTempValue() is num)
-        //           ? (calc.getTempValue() as num).toDouble()
-        //           : 0,
-        //       hum: (calc.getHumValue() is num)
-        //           ? (calc.getHumValue() as num).toDouble()
-        //           : 0,
-        //       spO2: calc.getSpO2Value(),
-        //       step: calc.getStepValue(),
-        //       power: calc.getPowerValue(),
-        //       time: calc.getTimeStamp(),
-        //       hrFiltered: (calc.getHRFiltered() is List)
-        //           ? (calc.getHRFiltered() as List)
-        //                 .map((e) => (e as num).toDouble())
-        //                 .toList()
-        //           : null,
-        //       brFiltered: (calc.getBRFiltered() is List)
-        //           ? (calc.getBRFiltered() as List)
-        //                 .map((e) => (e as num).toDouble())
-        //                 .toList()
-        //           : null,
-        //       isWearing:
-        //           calc.getIsWearing() == 1 || calc.getIsWearing() == true,
-        //       rawData: (calc.getRawData() is List)
-        //           ? (calc.getRawData() as List)
-        //                 .map((e) => (e as num).toInt())
-        //                 .toList()
-        //           : null,
-        //       type: calc.getType(),
-        //       fftOut: (calc.getFFTOut() is List)
-        //           ? (calc.getFFTOut() as List)
-        //                 .map((e) => (e as num).toDouble())
-        //                 .toList()
-        //           : null,
-        //       petPose: calc.getPetPoseValue(),
-        //     );
-        // if (_ref.mounted) {
-        //   state = state.copyWith();
-        // }
+        // ❌ 移除：不再立即呼叫 SDK 和更新 Provider
+        // await calc.splitPackage(Uint8List.fromList(dataValue.splitRawData));
+        // _pendingHealthUpdates[device.remoteId] = HealthData(...);
+        // _scheduleBatchUpdate();
       });
+
       subMap[c.uuid] = sub;
       devLog('Notify開啟', '[${device.platformName}] ${c.uuid}');
       state = state.copyWith();
@@ -510,74 +581,6 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
     } catch (e) {
       devLog('服務載入失敗', e.toString());
     }
-  }
-
-  // Future<void> _processAndUpsample(
-  //   List<int> currentPacket,
-  // ) async {
-  //   // 使用系統時間生成連續的時間戳，避免設備時間戳跳躍問題
-  //   final baseTimestamp = DateTime.now().millisecondsSinceEpoch ~/ 10;
-
-  //   // 直接處理當前封包
-  //   await _processSinglePacketWithTimestamp(currentPacket, baseTimestamp);
-  // }
-
-  // Future<void> _processSinglePacketWithTimestamp(
-  //   List<int> packetData,
-  //   int baseTimestamp,
-  // ) async {
-  //   if (_healthCalculator == null) return;
-
-  //   // ======= 步驟1: 數據分類篩選 =======
-  //   // 使用你現有的智慧篩選器，自動區分第一組/第二組/雜訊
-  //   final dataType = _ref
-  //       .read(filteredFirstRawDataProvider.notifier)
-  //       .mutiFilterData(packetData, _ref);
-
-  //   // ======= 步驟2: 只處理第一組數據 =======
-  //   if (dataType == DataType.first) {
-  //     // 從Provider取得篩選後的第一組數據
-  //     final dataValue = _ref.read(filteredFirstRawDataProvider);
-  //     final currentPacket = List<int>.from(dataValue.splitRawData);
-  //     final currentTimestamp = _bytesToTimestamp(currentPacket);
-
-  //     // 2️⃣ 送當前筆原始數據 (current)
-
-  //     // 傳一筆 HR => 52
-  //     await _healthCalculator!.splitPackage(
-  //       Uint8List.fromList(currentPacket),
-  //     );
-  //     // await _healthCalculator!.splitPackage(
-  //     //   Uint8List.fromList(currentPacket),
-  //     // );
-  //     // // 傳二筆 HR => 105
-
-  //     devLog('SDK送出', '原始數據=$currentPacket');
-  //     devLog('SDK送出', '原始 ts=$currentTimestamp');
-
-  //     // 更新UI
-  //     // await _updateUIAndProvider();
-
-  //     // 更新緩存供下次使用
-  //     // _firstGroupPacket = currentPacket;
-  //     // _firstGroupTimestamp = currentTimestamp;
-  //   } else if (dataType == DataType.second) {
-  //     // 第二組數據：完全忽略，不送SDK，不加Provider
-  //     devLog('數據過濾', '第二組數據已自動忽略');
-  //   } else if (dataType == DataType.noise) {
-  //     // 過渡期雜訊：完全忽略
-  //     devLog('數據過濾', '過渡期雜訊已自動忽略');
-  //   }
-  // }
-
-  /// 需要新增這個輔助方法來提取時間戳
-  int _bytesToTimestamp(List<int> packet) {
-    if (packet.length < 6) return 0;
-    return packet[1] |
-        (packet[2] << 8) |
-        (packet[3] << 16) |
-        (packet[4] << 24) |
-        (packet[5] << 32);
   }
 
   // --- 新增：將文件中的 Java/Kotlin 時間轉換邏輯翻譯成 Dart ---
@@ -604,6 +607,9 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
   /// 從指定裝置斷線
   Future<void> disconnectFromDevice(BluetoothDevice device) async {
     try {
+      // ✅ 斷線前立即發送該裝置的緩衝資料
+      //  _batchProcessor?.flush();
+
       // 取消監聽器
       await _connectionSubscriptions[device.remoteId]?.cancel();
       _connectionSubscriptions.remove(device.remoteId);
@@ -625,23 +631,34 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
     }
   }
 
-  /// 斷開所有連線
+  /// 斷開所有裝置的連線
   Future<void> disconnectAll() async {
+    // ✅ 斷線前立即處理所有緩衝資料
+    // _batchProcessor?.flush();
+    await Future.delayed(Duration(milliseconds: 200));
+
     final devices = List<BluetoothDevice>.from(state.connectedDevices.values);
 
     for (final device in devices) {
       await disconnectFromDevice(device);
     }
+
+    // ✅ 清理所有 calculator（每個都會呼叫 dispose）
     _calculators.clear();
   }
 
-  /// 斷線時清理快取
+  /// ✅ 修改：從連線列表中移除裝置，並清理相關資源
   void _removeDeviceFromConnected(BluetoothDevice device) {
     final newDevices = Map<DeviceIdentifier, BluetoothDevice>.from(
       state.connectedDevices,
     )..remove(device.remoteId);
     _servicesCache.remove(device.remoteId);
-    _calculators.remove(device.remoteId);
+
+    // ✅ 修改：清理時傳入 deviceId
+    final calc = _calculators.remove(device.remoteId);
+    if (calc != null) {
+      calc.dispose(device.remoteId.toString()); // ← 傳入 deviceId
+    }
 
     // 清除 per-device notify/read/sub
     _notifyValues.remove(device.remoteId);
@@ -664,7 +681,7 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
     return state.connectedDevices.containsKey(device.remoteId);
   }
 
-  /// 在 App 生命週期結束時，清理所有連線
+  /// 在 App 生命週期結束時,清理所有連線
   void cleanup() {
     devLog('', '開始清理藍牙資源...');
 
@@ -674,6 +691,14 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
 
     // 停止
     _batchUpdateTimer?.cancel();
+
+    // ✅ 完整清理批次處理器
+    _batchSubscription?.cancel();
+    _batchSubscription = null;
+    _statsSubscription?.cancel();
+    _statsSubscription = null;
+    _batchProcessor?.dispose(); // 呼叫 dispose 清理 Isolate
+    _batchProcessor = null;
 
     // 取消藍牙狀態監聽
     _adapterStateSubscription?.cancel();
@@ -694,7 +719,7 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
     }
 
     // 重置狀態
-    state = const BluetoothMultiConnectionState();
+    state = const BluetoothISOMultiConnectionState();
     devLog('', '已清理所有藍牙連線。');
   }
 
@@ -737,6 +762,11 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
 
   @override
   void dispose() {
+    // ✅ 在 StateNotifier dispose 前先清理批次處理器
+    _batchSubscription?.cancel();
+    _statsSubscription?.cancel();
+    _batchProcessor?.dispose();
+
     cleanup();
     super.dispose();
   }

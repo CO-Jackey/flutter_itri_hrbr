@@ -5,129 +5,181 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-// !!! 重要 !!!
-// 請確保下面的套件名稱是您在 .jar 檔案中找到的真實路徑！
 import com.itri.multible.itriuwbhr32hz.HealthCalculate
 
-import java.util.HashMap
+import kotlinx.coroutines.*
 
 class MainActivity: FlutterActivity() {
-    // 在 Kotlin 中，我們使用 companion object 來定義靜態常數
     companion object {
-        // 這個通道名稱必須和 Dart 中的完全一樣
         private const val CHANNEL = "com.example.flutter_itri_hrbr/health_calculate"
     }
 
-    private var healthCalculator: HealthCalculate? = null // 持有 HealthCalculate 的實例
+    // ✅ 使用 Map 管理多個設備的 SDK 實例
+    private val healthCalculators = mutableMapOf<String, HealthCalculate>()
+    
+    private val sdkScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    // 為每個設備建立獨立的鎖
+    private val sdkLocks = mutableMapOf<String, Any>()
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
-            // `call` 包含了從 Flutter 傳來的請求，`result` 用於回傳結果
             call, result ->
             when (call.method) {
                 "initialize" -> {
                     val type: Int? = call.argument("type")
                     if (type != null) {
-                        healthCalculator = HealthCalculate(type)
-                        result.success(null) // 表示成功
+                        try {
+                            println("[KT] Initialize with type: $type")
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("INIT_ERROR", e.message, null)
+                        }
                     } else {
                         result.error("INVALID_ARGUMENT", "Type is required.", null)
                     }
                 }
                 
                 "splitPackage" -> {
-                    if (healthCalculator == null) {
-                        result.error("NOT_INITIALIZED", "HealthCalculate is not initialized.", null)
+                    // val data: ByteArray? = call.argument("data")
+                    // val deviceId: String? = call.argument("deviceId")
+
+
+                    // ✅ 明確宣告類型並加入 null 檢查
+                    val data = call.argument<ByteArray>("data")
+                    val deviceId = call.argument<String>("deviceId")
+
+                    // 🔥 驗證參數
+                    if (data == null) {
+                        result.error("INVALID_ARGUMENT", "Data is required.", null)
                         return@setMethodCallHandler
                     }
-                    val data: ByteArray? = call.argument("data")
-                    if (data != null) {
-                        // 呼叫 .jar 中的方法
-                        healthCalculator!!.splitPackage(data)
+                    
+                    if (deviceId == null) {
+                        result.error("INVALID_ARGUMENT", "DeviceId is required.", null)
+                        return@setMethodCallHandler
+                    }
 
-                        // 準備回傳給 Flutter 的數據 - 使用 Any 類型來支援多種數據類型
-                        val healthData = HashMap<String, Any>()
-                        healthData["BRFiltered"] = healthCalculator!!.getBRFiltered().map { it.toDouble() } // 將數據轉換為 Double List
-                        healthData["BRValue"] = healthCalculator!!.getBRValue()
-                        healthData["FFTOut"] = healthCalculator!!.getFFTOut().map { it.toDouble() } // 將數據轉換為 Double List
-                        // healthData["GyroThreshold"] = healthCalculator!!.getGyroThreshold() // 沒有這個方法，打開 jar 後也沒有，sdk文件有誤
-                        healthData["GyroValueX"] = healthCalculator!!.getGyroValueX()
-                        healthData["GyroValueY"] = healthCalculator!!.getGyroValueY()
-                        healthData["GyroValueZ"] = healthCalculator!!.getGyroValueZ()
-                        healthData["HRFiltered"] = healthCalculator!!.getHRFiltered().map { it.toDouble() } // 將數據轉換為 Double List
-                        healthData["HRValue"] = healthCalculator!!.getHRValue()
-                        healthData["HumValue"] = healthCalculator!!.getHumValue()
-                        healthData["IsWearing"] = healthCalculator!!.getIsWearing()
-                        healthData["PetPoseValue"] = healthCalculator!!.getPetPoseValue()
-                        healthData["PowerValue"] = healthCalculator!!.getPowerValue()
-                        healthData["RawData"] = healthCalculator!!.getRawData().map { it.toInt() } // 將數據轉換為 Integer List
-                        // healthData["RRIValue"] = healthCalculator!!.getRRIValue() // 沒有這個方法，打開 jar 後也沒有，sdk文件有誤
-                        healthData["StepValue"] = healthCalculator!!.getStepValue()
-                        healthData["TempValue"] = healthCalculator!!.getTempValue()
-                        healthData["TimeStamp"] = healthCalculator!!.getTimeStamp()
-                        healthData["Type"] = healthCalculator!!.getType()
+                    // ✅ 在確認 deviceId 非 null 後再取得鎖
+                    val lock = synchronized(sdkLocks) {
+                        sdkLocks.getOrPut(deviceId) { Any() }
+                    }
+                    
+                    // ✅ 檢查資料長度
+                    if (data.isEmpty()) {
+                        result.error("EMPTY_DATA", "Received empty data array", null)
+                        return@setMethodCallHandler
+                    }
+                    
+                    if (data.size < 17) {
+                        result.error(
+                            "INSUFFICIENT_DATA", 
+                            "Data length ${data.size} is less than required 17 bytes", 
+                            null
+                        )
+                        return@setMethodCallHandler
+                    }
+                    
+                    // ✅✅✅ 關鍵修正：在主線程建立 SDK 實例
+                    val calculator = synchronized(healthCalculators) {
+                        healthCalculators.getOrPut(deviceId) {
+                            println("[KT] 🆕 為設備 $deviceId 建立新的 HealthCalculate 實例（主線程）")
+                            HealthCalculate(3) // ← 在主線程建立，有 Looper
+                        }
+                    }
+                    
+                    // ✅ 然後在背景線程執行運算（不阻塞主線程）
+                    sdkScope.launch(Dispatchers.Default) {
+                        try {
+                            val startTime = System.currentTimeMillis()
+                            
+                            // ✅ 關鍵：用鎖確保同一設備的資料順序處理
+                            synchronized(lock) {
+                                calculator.splitPackage(data)
+                            }
+                            
+                            // 🔥 在背景線程執行 SDK 運算
+                            // calculator.splitPackage(data)
+                            
 
-                        result.success(healthData) // 將包含所有數據的 Map 回傳
-                    } else {
-                        result.error("INVALID_ARGUMENT", "Data is required.", null)
+                            val elapsedTime = System.currentTimeMillis() - startTime
+                            println("[KT SDK] 設備 $deviceId 處理耗時: ${elapsedTime}ms")
+                            
+                            // 收集該設備的結果
+                            val healthData = HashMap<String, Any>()
+                            
+                            // ✅ 回傳時帶上 deviceId
+                            healthData["deviceId"] = deviceId
+                            
+                            // 從該設備專屬的 calculator 取得數據
+                            healthData["BRFiltered"] = calculator.getBRFiltered().map { it.toDouble() }
+                            healthData["BRValue"] = calculator.getBRValue()
+                            healthData["FFTOut"] = calculator.getFFTOut().map { it.toDouble() }
+                            healthData["GyroValueX"] = calculator.getGyroValueX()
+                            healthData["GyroValueY"] = calculator.getGyroValueY()
+                            healthData["GyroValueZ"] = calculator.getGyroValueZ()
+                            healthData["HRFiltered"] = calculator.getHRFiltered().map { it.toDouble() }
+                            healthData["HRValue"] = calculator.getHRValue()
+                            healthData["HumValue"] = calculator.getHumValue()
+                            healthData["IsWearing"] = calculator.getIsWearing()
+                            healthData["PetPoseValue"] = calculator.getPetPoseValue()
+                            healthData["PowerValue"] = calculator.getPowerValue()
+                            healthData["RawData"] = calculator.getRawData().map { it.toInt() }
+                            healthData["StepValue"] = calculator.getStepValue()
+                            healthData["TempValue"] = calculator.getTempValue()
+                            healthData["TimeStamp"] = calculator.getTimeStamp()
+                            healthData["Type"] = calculator.getType()
+                            
+                            // 🔥 回到主執行緒回傳結果
+                            withContext(Dispatchers.Main) {
+                                result.success(healthData)
+                            }
+                            
+                        } catch (e: Exception) {
+                            println("[KT SDK] 設備 $deviceId 錯誤: ${e.message}")
+                            e.printStackTrace()
+                            
+                            withContext(Dispatchers.Main) {
+                                result.error("SDK_ERROR", e.message, null)
+                            }
+                        }
                     }
                 }
-                // "splitPackage" -> {
-                //     if (healthCalculator == null) {
-                //         result.error("NOT_INITIALIZED", "HealthCalculate is not initialized.", null)
-                //         return@setMethodCallHandler
-                //     }
-                //     val data: ByteArray? = call.argument("data")
-                //     if (data != null) {
-                //         println("Data size: ${data.size}")
-                //         println("Data as hex: ${data.joinToString(" ") { "%02x".format(it) }}")
-                //         println("Data as bytes: ${data.contentToString()}")
-                //         // 呼叫 .jar 中的方法
-                //         healthCalculator!!.splitPackage(data)
-                //         // 印出 data 的不同格式
-
-
-
-                //         // 準備回傳給 Flutter 的數據 - 使用 Any 類型來支援多種數據類型
-                //         val healthData = HashMap<String, Any>()
-                //         healthData["hr"] = healthCalculator!!.hrValue
-                //         // healthData["br"] = healthCalculator!!.brValue
-                //         healthData["br"] = healthCalculator!!.getBRValue() // 呼吸率函數值
-                //         //ealthData["br_fun"] = healthCalculator!!.getBRValue()
-                        	
-                //         // healthData["gyroX"] = healthCalculator!!.gyroValueX
-                //         healthData["gyroX"] = healthCalculator!!.getGyroValueX()
-                //         healthData["gyroY"] = healthCalculator!!.getGyroValueY()
-                //         healthData["gyroZ"] = healthCalculator!!.getGyroValueZ()
-                //         // healthData["gyroY"] = healthCalculator!!.gyroValueY
-                //         // healthData["gyroZ"] = healthCalculator!!.gyroValueZ
-
-                //         healthData["petPose"] = healthCalculator!!.getPetPoseValue()
-
-                //         // 保留 Float 精度
-                //         healthData["temp"] = healthCalculator!!.tempValue
-                //         healthData["hum"] = healthCalculator!!.humValue
-                //         healthData["spO2"] = healthCalculator!!.spO2Value
-                //         healthData["step"] = healthCalculator!!.stepValue
-                //         healthData["power"] = healthCalculator!!.powerValue
-                //         healthData["time"] = healthCalculator!!.timeStamp
-                //         // healthData["hrFiltered"] = healthCalculator!!.hrFiltered
-                //         // healthData["brFiltered"] = healthCalculator!!.brFiltered
-
-                //         result.success(healthData) // 將包含所有數據的 Map 回傳
-                //     } else {
-                //         result.error("INVALID_ARGUMENT", "Data is required.", null)
-                //     }
-                // }
+                
                 "dispose" -> {
-                    healthCalculator = null
+                    val deviceId: String? = call.argument("deviceId")
+                    
+                    if (deviceId != null) {
+                        // ✅ 清理特定設備的 SDK 實例
+                        synchronized(healthCalculators) {
+                            healthCalculators.remove(deviceId)
+                            println("[KT] 🗑️ 已清理設備 $deviceId 的 HealthCalculate 實例")
+                        }
+                    } else {
+                        // 清理所有實例
+                        synchronized(healthCalculators) {
+                            healthCalculators.clear()
+                            println("[KT] 🗑️ 已清理所有 HealthCalculate 實例")
+                        }
+                    }
+                    
                     result.success(null)
                 }
+                
                 else -> {
                     result.notImplemented()
                 }
             }
         }
+    }
+    
+    override fun onDestroy() {
+        // ✅ 清理所有 SDK 實例
+        synchronized(healthCalculators) {
+            healthCalculators.clear()
+        }
+        sdkScope.cancel()
+        super.onDestroy()
     }
 }

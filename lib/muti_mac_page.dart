@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_itri_hrbr/services/muti_iso_mac_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'provider/per_device_health_provider.dart';
-import 'services/muti_mac_ble_service.dart';
+// import 'services/muti_mac_ble_service.dart';
 import 'helper/devLog.dart';
 
 class MutiMacPage extends ConsumerWidget {
@@ -12,7 +13,6 @@ class MutiMacPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    
     final btState = ref.watch(bluetoothManagerProvider);
     final devices = btState.connectedDevices.values.toList();
     return Scaffold(
@@ -67,7 +67,8 @@ class MutiMacPage extends ConsumerWidget {
 
   void _showScanDialog(
     BuildContext context,
-    BluetoothManager manager,
+    // BluetoothManager manager,
+    BluetoothISOManager manager,
   ) {
     manager.startScan();
     showDialog(
@@ -226,16 +227,16 @@ class _DeviceCardState extends ConsumerState<_DeviceCard> {
                   spacing: 12,
                   runSpacing: 8,
                   children: [
-                    metric('HR', health?.hr),
-                    metric('BR', health?.br),
-                    metric('GX', health?.gyroX),
-                    metric('GY', health?.gyroY),
-                    metric('GZ', health?.gyroZ),
-                    metric('TEMP', health?.temp),
-                    metric('HUM', health?.hum),
-                    metric('STEP', health?.step),
-                    metric('POWER', health?.power),
-                    metric('POSE', health?.petPose),
+                    // metric('HR', health?.hr),
+                    // metric('BR', health?.br),
+                    // metric('GX', health?.gyroX),
+                    // metric('GY', health?.gyroY),
+                    // metric('GZ', health?.gyroZ),
+                    // metric('TEMP', health?.temp),
+                    // metric('HUM', health?.hum),
+                    // metric('STEP', health?.step),
+                    // metric('POWER', health?.power),
+                    // metric('POSE', health?.petPose),
                   ],
                 ),
               ),
@@ -564,9 +565,10 @@ class _CharacteristicTile extends ConsumerWidget {
     return ListTile(
       dense: true,
       title: Text(c.uuid.toString(), style: const TextStyle(fontSize: 12)),
-      subtitle: display.isEmpty
-          ? null
-          : Text(display, style: const TextStyle(fontSize: 11)),
+      subtitle: Text(''), 
+      // display.isEmpty
+      //     ? null
+      //     : Text(display, style: const TextStyle(fontSize: 11)),
       trailing: Wrap(
         spacing: 4,
         children: [

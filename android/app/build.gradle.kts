@@ -46,4 +46,7 @@ flutter {
 dependencies {
     // ...existing code...
     implementation(files("libs/itriHRBR_new.jar"))
+    // ✅ 新增 Kotlin Coroutines 依賴
+    implementation ("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation ("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 }
