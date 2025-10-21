@@ -1,5 +1,6 @@
 import 'package:device_calendar/device_calendar.dart' as tz;
 import 'package:flutter/material.dart';
+import 'package:flutter_itri_hrbr/muti_view_mac_page.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:timezone/data/latest.dart' as tz;
 
@@ -129,6 +130,19 @@ class ChoosePage extends StatelessWidget {
                 );
               },
               child: const Text('行事曆範例'),
+            ),
+
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const PetMonitorSimplePage(),
+                  ),
+                );
+              },
+              child: const Text('多寵物監控簡易頁面'),
             ),
           ],
         ),
