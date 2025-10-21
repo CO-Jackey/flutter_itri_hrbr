@@ -9,6 +9,9 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
     // ═══════════════════════════════════════════════════════════════════════
     private var healthCalculators: [String: HRBRCalculate] = [:]
     
+    // ✅ 新增：記住預設類型（用於延遲初始化）
+    private var defaultType: Int = 3
+    
     // ═══════════════════════════════════════════════════════════════════════
     // 📡 註冊 Method Channel
     // ═══════════════════════════════════════════════════════════════════════
@@ -28,57 +31,59 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
         switch call.method {
             
         // ───────────────────────────────────────────────────────────────────
-        // 🏗️ initialize：初始化指定裝置的 SDK 實例
+        // 🏗️ initialize：只記住類型，不建立實例（延遲初始化）
         // ───────────────────────────────────────────────────────────────────
         case "initialize":
             guard let args = call.arguments as? [String: Any],
-                  let type = args["type"] as? Int,
-                  let deviceId = args["deviceId"] as? String else {
-                result(FlutterError(
-                    code: "INVALID_ARGUMENT",
-                    message: "Required arguments: 'type' (Int) and 'deviceId' (String)",
-                    details: nil
-                ))
-                return
-            }
-            
-            // ✅ 為該裝置建立新的 SDK 實例
-            let calculator = HRBRCalculate(index: type)
-            healthCalculators[deviceId] = calculator
-            
-            print("✅ [iOS] HealthCalculate initialized for device: \(deviceId) with type: \(type)")
-            result("HealthCalculate initialized for device \(deviceId) with type \(type)")
-
-        // ───────────────────────────────────────────────────────────────────
-        // 🔧 setType：設定指定裝置的類型
-        // ───────────────────────────────────────────────────────────────────
-        case "setType":
-            guard let args = call.arguments as? [String: Any],
-                  let deviceId = args["deviceId"] as? String,
                   let type = args["type"] as? Int else {
                 result(FlutterError(
                     code: "INVALID_ARGUMENT",
-                    message: "Required arguments: 'deviceId' (String) and 'type' (Int)",
+                    message: "Required argument: 'type' (Int)",
                     details: nil
                 ))
                 return
             }
             
-            guard let calculator = healthCalculators[deviceId] else {
-                result(FlutterError(
-                    code: "NOT_INITIALIZED",
-                    message: "HealthCalculate for device \(deviceId) is not initialized",
-                    details: nil
-                ))
-                return
-            }
-            
-            calculator.setType(type: type)
-            print("✅ [iOS] Type set to \(type) for device: \(deviceId)")
-            result("Type set to \(type) for device \(deviceId)")
+            // ✅ 只記住類型，實際實例在 splitPackage 時才建立
+            defaultType = type
+            print("✅ [iOS] Default SDK type set to \(type)")
+            result("Default type set to \(type)")
 
         // ───────────────────────────────────────────────────────────────────
-        // 📊 splitPackage：處理藍牙資料（核心方法）
+        // 🔧 setType：更新預設類型（並更新已存在的實例）
+        // ───────────────────────────────────────────────────────────────────
+        case "setType":
+            guard let args = call.arguments as? [String: Any],
+                  let type = args["type"] as? Int else {
+                result(FlutterError(
+                    code: "INVALID_ARGUMENT",
+                    message: "Required argument: 'type' (Int)",
+                    details: nil
+                ))
+                return
+            }
+            
+            // ✅ 更新預設類型
+            defaultType = type
+            
+            // ✅ 如果有指定 deviceId，更新該裝置的類型
+            if let deviceId = args["deviceId"] as? String,
+               let calculator = healthCalculators[deviceId] {
+                calculator.setType(type: type)
+                print("✅ [iOS] Type updated to \(type) for device: \(deviceId)")
+                result("Type set to \(type) for device \(deviceId)")
+            } else {
+                // 更新所有已存在的實例
+                for (deviceId, calculator) in healthCalculators {
+                    calculator.setType(type: type)
+                    print("✅ [iOS] Type updated to \(type) for device: \(deviceId)")
+                }
+                print("✅ [iOS] Default type updated to \(type) for all devices")
+                result("Default type set to \(type)")
+            }
+
+        // ───────────────────────────────────────────────────────────────────
+        // 📊 splitPackage：處理藍牙資料（核心方法 + 延遲初始化）
         // ───────────────────────────────────────────────────────────────────
         case "splitPackage":
             // 🔍 步驟 1：驗證參數
@@ -93,12 +98,19 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
                 return
             }
             
-            // 🔍 步驟 2：檢查該裝置的 SDK 實例是否存在
+            // 🔥 步驟 2：延遲初始化（首次使用時才建立實例）
+            if healthCalculators[deviceId] == nil {
+                let calculator = HRBRCalculate(index: defaultType)
+                healthCalculators[deviceId] = calculator
+                print("🆕 [iOS] Created SDK instance for device \(deviceId) with type \(defaultType)")
+            }
+            
+            // 🔍 步驟 3：取得該裝置的 SDK 實例
             guard let calculator = healthCalculators[deviceId] else {
-                print("⚠️ [iOS] ERROR: HealthCalculate for device \(deviceId) is not initialized")
+                print("❌ [iOS] ERROR: Failed to create calculator for device \(deviceId)")
                 result(FlutterError(
-                    code: "NOT_INITIALIZED",
-                    message: "HealthCalculate for device \(deviceId) is not initialized",
+                    code: "INIT_ERROR",
+                    message: "Failed to create SDK instance for device \(deviceId)",
                     details: nil
                 ))
                 return
@@ -106,7 +118,7 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
             
             let byteArray: [UInt8] = [UInt8](data.data)
 
-            // 🔍 步驟 3：驗證資料長度
+            // 🔍 步驟 4：驗證資料長度
             if byteArray.isEmpty {
                 print("⚠️ [iOS] ERROR: Received empty byte array for device \(deviceId)")
                 result(FlutterError(
@@ -127,19 +139,18 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
                 return
             }
 
-            // 📊 步驟 4：呼叫 SDK 處理資料
-            // print("📡 [iOS] Processing \(byteArray.count) bytes for device: \(deviceId)")
-            
+            // 📊 步驟 5：呼叫 SDK 處理資料
             let startTime = Date()  // ⏱️ 效能計時開始
             let status = calculator.splitPackage(data: byteArray)
             let elapsedTime = Date().timeIntervalSince(startTime) * 1000  // 轉換為毫秒
             
+            // 可選：印出效能資訊
             // print("⏱️ [iOS] SDK processing took: \(String(format: "%.2f", elapsedTime))ms for device: \(deviceId)")
 
-            // 📤 步驟 5：封裝結果並回傳
+            // 📤 步驟 6：封裝結果並回傳
             let healthData = calculator.hrbrData
             let returnData: [String: Any?] = [
-                "deviceId": deviceId,  // ✅ 新增：回傳 deviceId
+                "deviceId": deviceId,  // ✅ 回傳 deviceId 讓 Flutter 端驗證
                 "BRValue": healthData.BRValue,
                 "HRValue": healthData.HRValue,
                 "HumValue": healthData.HumValue,
@@ -169,7 +180,7 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
                let deviceId = args["deviceId"] as? String {
                 // ✅ 清理指定裝置
                 if healthCalculators.removeValue(forKey: deviceId) != nil {
-                    print("🗑️ [iOS] Disposed HealthCalculate for device: \(deviceId)")
+                    print("🗑️ [iOS] Disposed SDK instance for device: \(deviceId)")
                     result("Disposed device \(deviceId)")
                 } else {
                     print("⚠️ [iOS] Device \(deviceId) was not found in active calculators")
@@ -179,7 +190,7 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
                 // ✅ 清理所有裝置
                 let deviceCount = healthCalculators.count
                 healthCalculators.removeAll()
-                print("🗑️ [iOS] Disposed all \(deviceCount) HealthCalculate instances")
+                print("🗑️ [iOS] Disposed all \(deviceCount) SDK instances")
                 result("Disposed all \(deviceCount) devices")
             }
             

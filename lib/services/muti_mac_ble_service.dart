@@ -71,6 +71,7 @@ class BluetoothManager extends StateNotifier<BluetoothMultiConnectionState> {
   HealthCalculate _getCalculator(DeviceIdentifier id) {
     return _calculators.putIfAbsent(id, () => HealthCalculate(3));
   }
+  
 
   // 連線狀態監聽
   final Map<DeviceIdentifier, StreamSubscription<BluetoothConnectionState>>

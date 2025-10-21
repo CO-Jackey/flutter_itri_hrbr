@@ -805,15 +805,15 @@ class SimpleDeviceCard extends ConsumerWidget {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const Spacer(),
-            Text(
-              device.deviceId,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            // const Spacer(),
+            // Text(
+            //   device.deviceId,
+            //   style: const TextStyle(
+            //     color: Colors.white,
+            //     fontSize: 10,
+            //     fontWeight: FontWeight.bold,
+            //   ),
+            // ),
             const Spacer(),
             Text(
               statusText,
@@ -894,6 +894,7 @@ class SimpleDeviceCard extends ConsumerWidget {
           device.isHeartRateDanger,
           device.isHeartRateWarning,
         ),
+        // const Spacer(),
         // const SizedBox(height: 10),
         _buildHealthRow(
           '💨 呼吸',
@@ -904,7 +905,7 @@ class SimpleDeviceCard extends ConsumerWidget {
         ),
         // const SizedBox(height: 10),
         _buildHealthRow(
-          '🌡️ 體溫',
+          '🌡️ 溫度',
           device.temp,
           '°C',
           false,
