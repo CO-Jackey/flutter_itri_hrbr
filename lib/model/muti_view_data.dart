@@ -9,6 +9,7 @@ enum DeviceStatus {
 /// UI 專用的寵物資訊卡片資料模型
 class CardPetInfo {
   final String deviceId; // 設備 ID
+  final int? devicePower; // 設備電量
   final int? cageNumber; // 籠位編號
   final String? name; // 寵物名稱
   final String? petType; // 狗或貓
@@ -26,6 +27,7 @@ class CardPetInfo {
 
   CardPetInfo({
     required this.deviceId,
+    this.devicePower,
     this.cageNumber,
     this.name,
     this.petType,
@@ -109,6 +111,7 @@ class CardPetInfo {
 
   CardPetInfo copyWith({
     String? deviceId,
+    int? devicePower,
     int? cageNumber,
     String? name,
     String? petType,
@@ -124,6 +127,7 @@ class CardPetInfo {
   }) {
     return CardPetInfo(
       deviceId: deviceId ?? this.deviceId,
+      devicePower: devicePower ?? this.devicePower,
       cageNumber: cageNumber ?? this.cageNumber,
       name: name ?? this.name,
       petType: petType ?? this.petType,

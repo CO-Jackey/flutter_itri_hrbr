@@ -814,6 +814,14 @@ class SimpleDeviceCard extends ConsumerWidget {
             //     fontWeight: FontWeight.bold,
             //   ),
             // ),
+            // Text(
+            //   '${device.devicePower.toString()}%',
+            //   style: const TextStyle(
+            //     color: Colors.white,
+            //     fontSize: 18,
+            //     fontWeight: FontWeight.bold,
+            //   ),
+            // ),
             const Spacer(),
             Text(
               statusText,
@@ -874,7 +882,7 @@ class SimpleDeviceCard extends ConsumerWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                '${device.age ?? 0}歲 | ${device.weight?.toStringAsFixed(1) ?? 0.0}kg',
+                '${device.age ?? 0}歲 | ${device.weight?.toStringAsFixed(1) ?? 0.0}kg | ${device.devicePower?.toString() ?? 'N/A'}% 電量',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
               ),
             ],

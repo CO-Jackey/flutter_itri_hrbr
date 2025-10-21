@@ -34,6 +34,7 @@ final cardPetInfoMapProvider = Provider<Map<String, CardPetInfo>>((ref) {
 
       result[deviceIdStr] = CardPetInfo(
         deviceId: deviceIdStr,
+        devicePower: healthData.power, // 新增設備電量
         cageNumber: _getCageNumberFromMac(deviceIdStr),
         name: _getDefaultName(deviceIdStr),
         petType: _getDefaultPetType(deviceIdStr),
