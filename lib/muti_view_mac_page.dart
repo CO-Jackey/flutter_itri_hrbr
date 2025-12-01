@@ -913,9 +913,9 @@ class SimpleDeviceCard extends ConsumerWidget {
         ),
         // const SizedBox(height: 10),
         _buildHealthRow(
-          '🌡️ 溫度',
-          device.temp,
-          '°C',
+          '步數',
+          device.step,
+          '步',
           false,
           false,
           // device.isTemperatureDanger,

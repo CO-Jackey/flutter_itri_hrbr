@@ -45,6 +45,7 @@ final cardPetInfoMapProvider = Provider<Map<String, CardPetInfo>>((ref) {
         hr: healthData.hr,
         br: healthData.br,
         temp: healthData.temp,
+        step: healthData.step,
         isWearing: healthData.isWearing,
         updatedTime: DateTime.now(),
       );
@@ -191,6 +192,7 @@ final singleCardPetInfoDirectProvider = Provider.family<CardPetInfo?, String>((
     hr: healthData.hr,
     br: healthData.br,
     temp: healthData.temp,
+    step: healthData.step,
     isWearing: healthData.isWearing,
     updatedTime: DateTime.now(),
   );

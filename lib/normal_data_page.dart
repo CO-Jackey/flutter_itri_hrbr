@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_itri_hrbr/helper/devLog.dart';
 import 'package:flutter_itri_hrbr/provider/health_provider.dart';
-import 'package:flutter_itri_hrbr/services/HealthCalculate.dart';
+import 'package:flutter_itri_hrbr/services/HealthCalculate_Device_ID.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -40,7 +40,16 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
   dynamic petPose; // 寵物姿勢
 
   // --- 新增這一行 ---
-  HealthCalculate? _healthCalculator;
+  // HealthCalculate? _healthCalculator;
+  HealthCalculateDeviceID? _healthCalculator;
+
+  BluetoothDevice? _lastConnectedDevice; // ✅ 新增：用來記住剛斷線的裝置
+
+  // ✅ 新增：用來標記是否為「手動」斷線
+  bool _isIntentionalDisconnect = false;
+
+  // ✅ 新增：標記是否正在連線過程中
+  bool _isConnecting = false;
 
   //---------------------------
 
@@ -99,64 +108,195 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
     return false; // 如果權限被拒絕，返回 false
   }
 
-  Future<void> _connectToDevice(BluetoothDevice device) async {
-    // 1. 在發起連接前，先設定好狀態監聽
-    //    這個監聽主要負責處理「意外斷線」的情況
-    _connectionStateSubscription = device.connectionState.listen((state) {
-      if (state == BluetoothConnectionState.disconnected) {
-        devLog('監聽器', '裝置意外斷開，清理狀態...');
-        // 如果裝置斷開，重置所有相關狀態
-        if (mounted) {
-          setState(() {
-            _connectedDevice = null;
-            _services = [];
-            _readValues.clear();
-            _notifyValues.clear();
-            // 取消所有舊的通知訂閱
-            for (var sub in _notifySubscriptions.values) {
-              sub.cancel();
-            }
-            _notifySubscriptions.clear();
-          });
-        }
-      }
-    });
+  // 修改方法簽名，加入 isAutoConnect 參數，預設為 false (手動連線)
+  Future<void> _connectToDevice(
+    BluetoothDevice device, {
+    bool isAutoConnect = false,
+  }) async {
+    // 0. 防止重複監聽，先取消舊的
+    await _connectionStateSubscription?.cancel();
+    _connectionStateSubscription = null; // ✅ 新增：確保清空
+
+    _isIntentionalDisconnect = false;
+    _isConnecting = true;
+
+    // ❌ 移除這裡的監聽器建立
+    // _connectionStateSubscription = device.connectionState.listen(...);
 
     try {
-      // 2. 發起連接，並設定超時
-      await device.connect(timeout: Duration(seconds: 15));
+      // 2. 根據模式選擇連線方式
+      if (isAutoConnect) {
+        devLog('連線模式', '啟動自動連線 (等待裝置出現...)');
+        await device.connect(autoConnect: true, mtu: null);
 
-      // 3. 連接成功後，立刻探索服務
-      List<BluetoothService> discoveredServices = await device
-          .discoverServices();
+        devLog('連線模式', '正在等待連線建立...');
+        await device.connectionState
+            .where((val) {
+              devLog('連線狀況', '$val');
+              return val == BluetoothConnectionState.connected;
+            })
+            .first;
+        devLog('連線模式', '裝置已成功連線！');
+      } else {
+        devLog('連線模式', '啟動手動連線 (超時設定 15秒)');
+        await device.connect(
+          autoConnect: true,
+          // timeout: const Duration(seconds: 15),
+          mtu: null,
+        );
+      }
 
-      // 4. 所有操作都成功後，才一次性更新UI狀態
+      // 3. 連接成功後，探索服務
+      devLog('連線模式', '開始探索服務...');
+      List<BluetoothService> discoveredServices = await device.discoverServices();
+      devLog('連線模式', '服務探索完成');
+
+      // 4. 更新 UI
       if (mounted) {
         setState(() {
           _connectedDevice = device;
           _services = discoveredServices;
-
-          //-------------------------
-
-          // --- 新增這兩行：初始化演算法 ---
-          // 假設我們要測試的是狗 (type: 3)
-          _healthCalculator = HealthCalculate(3);
-
-          //----------------------------
+          _healthCalculator = HealthCalculateDeviceID(3);
         });
-        devLog(
-          '連接流程',
-          '成功連接到 ${device.platformName} 並發現 ${_services.length} 個服務',
-        );
+
+        await _autoSubscribeFFF4(device, discoveredServices);
       }
-    } catch (e) {
+
+      // ✅ 所有流程完成後，才建立斷線監聽器
+      _isConnecting = false;
+      devLog('連線模式', '✅ 連線流程完成，開始監聽斷線事件');
+
+      _connectionStateSubscription = device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected) {
+          devLog('監聽器', '裝置斷開');
+
+          _lastConnectedDevice = device;
+
+          if (mounted) {
+            setState(() {
+              _connectedDevice = null;
+              _services = [];
+              _readValues.clear();
+              _notifyValues.clear();
+              for (var sub in _notifySubscriptions.values) {
+                sub.cancel();
+              }
+              _notifySubscriptions.clear();
+            });
+          }
+
+          if (!_isIntentionalDisconnect) {
+            devLog('自動重連', '偵測到意外斷線，3秒後啟動背景重連...');
+            Future.delayed(const Duration(seconds: 3), () {
+              if (!_isIntentionalDisconnect && mounted) {
+                _connectToDevice(_lastConnectedDevice!, isAutoConnect: true);
+              }
+            });
+          } else {
+            devLog('監聯器', '使用者手動斷線，不執行重連。');
+          }
+        }
+      });
+
+    } catch (e, stackTrace) {
+      _isConnecting = false;
+      devLog('Strace', '$stackTrace');
       devLog('連接失敗', '$e');
-      // 連接失敗或超時，清理資源
-      _disconnectFromDevice();
+
+      // if (isAutoConnect && !_isIntentionalDisconnect) {
+      //   devLog('自動重連', '連線過程發生錯誤，3秒後重試...');
+      //   await Future.delayed(const Duration(seconds: 3));
+      //   if (!_isIntentionalDisconnect && mounted) {
+      //     _connectToDevice(_lastConnectedDevice!, isAutoConnect: true);
+      //   }
+      // }
     }
   }
 
+  // ...existing code...
+
+  /// 自動訂閱 fff4 特徵值
+  Future<void> _autoSubscribeFFF4(
+    BluetoothDevice device,
+    List<BluetoothService> services,
+  ) async {
+    try {
+      devLog('[訂閱流程]', '🔍 開始搜尋 fff4 特徵...');
+      BluetoothCharacteristic? fff4Char;
+
+      // 1. 遍歷服務尋找 fff4
+      for (final service in services) {
+        for (final char in service.characteristics) {
+          final uuidStr = char.uuid.toString().toLowerCase();
+
+          // 檢查 UUID 是否包含 fff4 且具備 Notify 或 Indicate 屬性
+          if (uuidStr.contains('fff4') &&
+              (char.properties.notify || char.properties.indicate)) {
+            fff4Char = char;
+            devLog('[訂閱流程]', '✅ 找到 fff4 特徵: ${char.uuid}');
+            break;
+          }
+        }
+        if (fff4Char != null) break;
+      }
+
+      // 2. 如果沒找到，拋出錯誤
+      if (fff4Char == null) {
+        devLog('[訂閱流程]', '⚠️ 沒有找到 fff4 特徵');
+        // 列出所有特徵幫助 debug (可選)
+        // for (final service in services) {
+        //   for (final char in service.characteristics) {
+        //     devLog('[訂閱流程]', '  - ${char.uuid}');
+        //   }
+        // }
+        return;
+      }
+
+      // 3. 呼叫現有的 _toggleNotify 方法進行訂閱
+      devLog('[訂閱流程]', '📡 開始訂閱 fff4...');
+
+      // 確保在 UI 執行緒操作 (雖然 _toggleNotify 內部有 setState，但保險起見)
+      if (mounted) {
+        await _toggleNotify(fff4Char);
+      }
+
+      // 4. 驗證訂閱狀態 (檢查本地 Map 是否有紀錄)
+      final isSubscribed = _notifySubscriptions.containsKey(fff4Char.uuid);
+
+      if (isSubscribed) {
+        devLog('[訂閱流程]', '✅ fff4 自動訂閱成功！');
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ 自動訂閱 FFF4 成功，開始接收數據'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        throw Exception('訂閱狀態未變更');
+      }
+    } catch (e) {
+      devLog('[訂閱流程]', '❌ 自動訂閱失敗: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ 自動訂閱失敗: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // ...existing code...
+
   void _disconnectFromDevice({bool updateState = true}) {
+    // ✅ 標記為故意斷線，這樣監聽器就不會觸發自動重連
+    _isIntentionalDisconnect = true;
+
     // 首先取消狀態監聽，避免觸發不必要的重連或清理邏輯
     _connectionStateSubscription?.cancel();
     _connectionStateSubscription = null;
@@ -166,6 +306,11 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
       _connectedDevice?.disconnect();
     } catch (e) {
       devLog('斷開設備錯誤', '$e');
+    }
+
+    // ✅ 修改這裡：在清除前，先記住它是誰
+    if (_connectedDevice != null) {
+      _lastConnectedDevice = _connectedDevice;
     }
 
     // 清理 UI 狀態或直接更新內部狀態（當從 dispose 呼叫時，不做 setState）
@@ -271,7 +416,11 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
                             onTap: () async {
                               await FlutterBluePlus.stopScan();
                               try {
-                                await _connectToDevice(result.device);
+                                // 使用手動連線模式，這樣連不上會拋出例外，UI 才能顯示 SnackBar
+                                await _connectToDevice(
+                                  result.device,
+                                  isAutoConnect: false,
+                                );
                                 if (Navigator.of(context).canPop()) {
                                   Navigator.of(context).pop();
                                 }
@@ -356,18 +505,18 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
           // 1. 將收到的原始 byte array (value) 餵給演算法
           //    現在這個方法是 Future，所以我們需要 await
           if (_healthCalculator != null) {
-
-
-            
-            devLog(
-              'Uint8List.fromList(value)長度',
-              Uint8List.fromList(value).length.toString(),
-            );
+            // devLog(
+            //   'Uint8List.fromList(value)長度',
+            //   Uint8List.fromList(value).length.toString(),
+            // );
 
             devLog('收到的原始數據(未轉)', value.toString());
-            devLog('收到的原始數據(Uint8List)', Uint8List.fromList(value).toString());
+            // devLog('收到的原始數據(Uint8List)', Uint8List.fromList(value).toString());
 
-            await _healthCalculator!.splitPackage(Uint8List.fromList(value));
+            await _healthCalculator!.splitPackage(
+              Uint8List.fromList(value),
+              c.remoteId.str,
+            );
           }
 
           // 2. 從演算法中獲取最新的計算結果
@@ -453,12 +602,23 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
               );
 
           // 4. (可選) 在日誌中印出，方便觀察
-          devLog('演算法輸出', 'HR: $newHR, BR: $newBR');
-          devLog(
-            '陀螺儀輸出',
-            'GYRO_X: $newGYRO_X, GYRO_Y: $newGYRO_Y, GYRO_Z: $newGYRO_Z',
+          // devLog('演算法輸出', 'HR: $newHR, BR: $newBR');
+          // devLog(
+          //   '陀螺儀輸出',
+          //   'GYRO_X: $newGYRO_X, GYRO_Y: $newGYRO_Y, GYRO_Z: $newGYRO_Z',
+          // );
+          // devLog('寵物姿勢', new_petPose.toString());
+
+          DateTime realTimeOrigin = DateTime.fromMillisecondsSinceEpoch(
+            newTIME,
           );
-          devLog('寵物姿勢', new_petPose.toString());
+
+          devLog(
+            '當前標準時間',
+            realTimeOrigin.toString(),
+          );
+
+          devLog('時間戳', newTIME.toString());
 
           //devLog('原始數據', new_RawData.toString());
 
@@ -467,7 +627,7 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
           setState(() {
             _notifyValues[c.uuid] = value;
           });
-          devLog('收到通知', 'UUID: ${c.uuid}, 值: $value');
+          // devLog('收到通知', 'UUID: ${c.uuid}, 值: $value');
         });
         setState(() {
           _notifySubscriptions[c.uuid] = sub;
@@ -760,6 +920,19 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
   }
 
   // 建立尚未連線時的畫面
+  // Widget _buildDisconnectedView() {
+  //   return Column(
+  //     mainAxisAlignment: MainAxisAlignment.center,
+  //     children: [
+  //       ElevatedButton(
+  //         onPressed: () => _toggleScan(context),
+  //         child: const Text('掃描並連接藍牙裝置'),
+  //       ),
+  //     ],
+  //   );
+  // }
+
+  // 建立尚未連線時的畫面
   Widget _buildDisconnectedView() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -768,6 +941,45 @@ class _NormalDataPageState extends ConsumerState<NormalDataPage> {
           onPressed: () => _toggleScan(context),
           child: const Text('掃描並連接藍牙裝置'),
         ),
+
+        // ✅ 新增：如果有上一次連線的裝置，顯示重連按鈕
+        if (_lastConnectedDevice != null) ...[
+          const SizedBox(height: 20),
+          const Text('或者'),
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  '上次連線: ${_lastConnectedDevice!.platformName}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 10),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('重新連線'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () {
+                    // 🔥 呼叫連線方法，這裡看您要用手動還是自動模式
+                    // 建議用 false (手動模式) 這樣有 timeout 比較好除錯
+                    _connectToDevice(
+                      _lastConnectedDevice!,
+                      isAutoConnect: true,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }

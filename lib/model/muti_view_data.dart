@@ -22,6 +22,7 @@ class CardPetInfo {
   final int hr; // 心率
   final int br; // 呼吸率
   final double temp; // 溫度
+  final int step; // 步數
   final bool isWearing; // 是否佩戴裝置
   final DateTime updatedTime; // 更新時間
 
@@ -37,6 +38,7 @@ class CardPetInfo {
     required this.hr,
     required this.br,
     required this.temp,
+    required this.step,
     required this.isWearing,
     required this.updatedTime,
     this.imageUrl,
@@ -121,6 +123,7 @@ class CardPetInfo {
     int? hr,
     int? br,
     double? temp,
+    int? step,
     bool? isWearing,
     DateTime? updatedTime,
     String? imageUrl,
@@ -137,6 +140,7 @@ class CardPetInfo {
       hr: hr ?? this.hr,
       br: br ?? this.br,
       temp: temp ?? this.temp,
+      step: step ?? this.step,
       isWearing: isWearing ?? this.isWearing,
       updatedTime: updatedTime ?? this.updatedTime,
       imageUrl: imageUrl ?? this.imageUrl,

@@ -1,3 +1,10 @@
+//
+//  HealthCalculatePlugin.swift
+//  Runner
+//
+//  Created by Jackey on 2025/11/17.
+//
+
 import Foundation
 import Flutter
 import UIKit
@@ -140,9 +147,9 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
             }
 
             // 📊 步驟 5：呼叫 SDK 處理資料
-            let startTime = Date()  // ⏱️ 效能計時開始
+            // let startTime = Date()  // ⏱️ 效能計時開始
             let status = calculator.splitPackage(data: byteArray)
-            let elapsedTime = Date().timeIntervalSince(startTime) * 1000  // 轉換為毫秒
+            // let elapsedTime = Date().timeIntervalSince(startTime) * 1000  // 轉換為毫秒
             
             // 可選：印出效能資訊
             // print("⏱️ [iOS] SDK processing took: \(String(format: "%.2f", elapsedTime))ms for device: \(deviceId)")
