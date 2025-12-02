@@ -21,9 +21,6 @@ class DataMatchPage extends ConsumerStatefulWidget {
 }
 
 class _DataMatchPageState extends ConsumerState<DataMatchPage> {
-  // --- 新增這一行，用來緩存上一筆收到的封包 ---
-  List<int>? _previousPacket;
-
   // 新增統計變數
   int _originalPacketCount = 0;
   int _interpolatedPacketCount = 0;
@@ -195,8 +192,6 @@ class _DataMatchPageState extends ConsumerState<DataMatchPage> {
   }
 
   void _toggleScan(BuildContext context) async {
-    // ... 您的掃描 Dialog 程式碼 ...
-    // (此處省略以保持簡潔)
     bool permissionsGranted = await _requestPermissions();
     if (!permissionsGranted) {
       if (mounted) {
@@ -845,7 +840,7 @@ class _DataMatchPageState extends ConsumerState<DataMatchPage> {
     // 使用你現有的智慧篩選器，自動區分第一組/第二組/雜訊
     final dataType = ref
         .read(filteredFirstRawDataProvider.notifier)
-        .filterData(packetData, ref);
+        .filterData(packetData, ref as Ref);
 
     // ======= 步驟2: 只處理第一組數據 =======
     if (dataType == DataType.first) {

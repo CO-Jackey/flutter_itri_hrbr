@@ -1,5 +1,6 @@
 import 'package:device_calendar/device_calendar.dart' as tz;
 import 'package:flutter/material.dart';
+import 'package:flutter_itri_hrbr/data_match_view.dart';
 import 'package:flutter_itri_hrbr/muti_view_mac_page.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:timezone/data/latest.dart' as tz;
@@ -94,6 +95,18 @@ class ChoosePage extends StatelessWidget {
                 );
               },
               child: const Text('分類資料頁面'),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const DataMatchViewPage(),
+                  ),
+                );
+              },
+              child: const Text('分類資料頁面2'),
             ),
             const SizedBox(height: 20),
             ElevatedButton(

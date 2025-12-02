@@ -107,7 +107,7 @@ class HealthDataNotifier extends StateNotifier<HealthData> {
   /// 2. 之後若封包第 6 位 == baseline，就存進 filteredFirstRawDataProvider。
   /// 3. 不再每次更新 baseline，也不需要比較「上一筆」。
   /// 4. petPose (<5) 條件如果仍要保留就一起判斷；若不要可移除 petPoseOk。
-  DataType filterData(List<int> splitRawData, WidgetRef ref) {
+  DataType filterData(List<int> splitRawData, Ref ref) {
     // 長度不足：當成無法判斷，直接丟 second 並記錄
 
     final dataType = ref
