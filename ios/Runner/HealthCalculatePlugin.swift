@@ -446,31 +446,31 @@ public class HealthCalculatePlugin: NSObject, FlutterPlugin {
         // ───────────────────────────────────────────────────────────────────
         // 🔄 reset：重置特定設備（不用 dispose，直接重建）
         // ───────────────────────────────────────────────────────────────────
-        case "reset":
-            guard let args = call.arguments as? [String: Any],
-                  let deviceId = args["deviceId"] as? String else {
-                result(FlutterError(
-                    code: "INVALID_ARGUMENT",
-                    message: "DeviceId is required for reset.",
-                    details: nil
-                ))
-                return
-            }
+        // case "reset":
+        //     guard let args = call.arguments as? [String: Any],
+        //           let deviceId = args["deviceId"] as? String else {
+        //         result(FlutterError(
+        //             code: "INVALID_ARGUMENT",
+        //             message: "DeviceId is required for reset.",
+        //             details: nil
+        //         ))
+        //         return
+        //     }
             
-            lock.lock()
-            defer { lock.unlock() }
+        //     lock.lock()
+        //     defer { lock.unlock() }
             
-            // 移除舊的
-            healthCalculators.removeValue(forKey: deviceId)
+        //     // 移除舊的
+        //     healthCalculators.removeValue(forKey: deviceId)
             
-            // 建立新的
-            healthCalculators[deviceId] = HRBRCalculate(index: defaultType)
+        //     // 建立新的
+        //     healthCalculators[deviceId] = HRBRCalculate(index: defaultType)
             
-            // 清理處理狀態
-            processingFlags.removeValue(forKey: deviceId)
+        //     // 清理處理狀態
+        //     processingFlags.removeValue(forKey: deviceId)
             
-            print("🔄 [iOS] 已重置設備 \(deviceId) 的 HealthCalculate 實例")
-            result(true)
+        //     print("🔄 [iOS] 已重置設備 \(deviceId) 的 HealthCalculate 實例")
+        //     result(true)
             
         // ───────────────────────────────────────────────────────────────────
         // 📊 getStatus：檢查 SDK 實例狀態

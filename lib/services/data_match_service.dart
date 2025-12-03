@@ -14,6 +14,16 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ✅ 新增：重連階段枚舉
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum ReconnectPhase {
+  none, // 沒有在重連
+  quick, // 階段1：快速直連（利用記憶）
+  full, // 階段2：完整清理重連
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // State 類別
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -28,6 +38,9 @@ class DataMatchState {
   // ✅ 新增：重連狀態
   final bool isReconnecting;
   final int reconnectAttempts;
+
+  // ✅ 新增：重連階段
+  final ReconnectPhase reconnectPhase; // ⭐ 加這一行
 
   // 統計數據
   final int originalPacketCount;
@@ -48,6 +61,7 @@ class DataMatchState {
     this.interpolatedPacketCount = 0,
     this.packetsInCurrentSecond = 0,
     this.currentSecond = 0,
+    this.reconnectPhase = ReconnectPhase.none, // ⭐ 預設值
   });
 
   bool get isConnected => connectedDevice != null;
@@ -66,6 +80,7 @@ class DataMatchState {
     int? packetsInCurrentSecond,
     int? currentSecond,
     bool clearDevice = false,
+    ReconnectPhase? reconnectPhase, // ⭐ 新增參數
   }) {
     return DataMatchState(
       connectedDevice: clearDevice
@@ -84,6 +99,7 @@ class DataMatchState {
       packetsInCurrentSecond:
           packetsInCurrentSecond ?? this.packetsInCurrentSecond,
       currentSecond: currentSecond ?? this.currentSecond,
+      reconnectPhase: reconnectPhase ?? this.reconnectPhase, // ⭐ 新增這一行
     );
   }
 }
@@ -119,6 +135,9 @@ class DataMatchService extends StateNotifier<DataMatchState> {
 
   // ✅ 新增：記住上次連線的裝置（用於自動重連）
   BluetoothDevice? _lastConnectedDevice;
+
+  // ✅ 新增：記住上次連線的服務 UUIDs
+  List<Guid> _lastConnectedServiceUuids = [];
 
   // ✅ 新增：重連相關
   int _reconnectAttempts = 0;
@@ -276,6 +295,7 @@ class DataMatchService extends StateNotifier<DataMatchState> {
 連線嘗試次數: $_connectAttempts
 斷線嘗試次數: $_disconnectAttempts
 重連嘗試次數: $_reconnectAttempts / $_maxReconnectAttempts
+重連階段: ${state.reconnectPhase}  // ⭐ 加這行
 _isConnecting: $_isConnecting
 _isConnected: $_isConnected
 _isDisconnecting: $_isDisconnecting
@@ -449,6 +469,7 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     try {
       // ✅ 統一使用手動連線模式（不用 autoConnect）
       devLog('連線流程', '🚀 開始連線...');
+
       await device.connect(
         autoConnect: false,
         timeout: const Duration(seconds: 10),
@@ -494,45 +515,53 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
 
       state = state.copyWith(isReconnecting: false);
 
-      // ⭐⭐⭐ 關鍵修改：確保斷線並等待清理 ⭐⭐⭐
-      try {
-        await device.disconnect();
-        devLog('連線流程', '✅ 已執行 disconnect()');
+      // ⭐⭐⭐ 根據當前階段決定處理方式 ⭐⭐⭐
+      if (isAutoReconnect) {
+        final currentPhase = state.reconnectPhase;
 
-        // ⭐ iOS 需要等待清理時間！
-        if (Platform.isIOS) {
-          devLog('連線流程', '⏳ [iOS] 等待 3 秒讓系統清理連接狀態...');
-          await Future.delayed(const Duration(seconds: 3));
-          // ⭐⭐⭐ 額外檢查並清理系統連接 ⭐⭐⭐
-          try {
-            final connectedDevices = FlutterBluePlus.connectedDevices;
-            for (var dev in connectedDevices) {
-              if (dev.remoteId.str == device.remoteId.str) {
-                devLog('連線流程', '⚠️ 在系統中找到殘留連接，再次斷開');
-                await dev.disconnect();
-                await Future.delayed(const Duration(milliseconds: 500));
-              }
-            }
-          } catch (checkError) {
-            devLog('連線流程', '系統檢查失敗: $checkError');
+        if (currentPhase == ReconnectPhase.quick) {
+          // 階段1失敗：不做 disconnect，直接切換到階段2
+          devLog('連線流程', '⚠️ 階段1連線失敗，準備切換到階段2');
+
+          state = state.copyWith(
+            reconnectPhase: ReconnectPhase.full,
+          );
+
+          if (!_isIntentionalDisconnect) {
+            devLog('連線流程', '繼續重連流程（階段2）...');
+            _scheduleReconnect(device);
           }
-          devLog('連線流程', '✅ [iOS] 清理等待完成');
         } else {
-          devLog('連線流程', '⏳ [Android] 等待 300ms 清理...');
-          await Future.delayed(const Duration(milliseconds: 300));
-        }
-      } catch (disconnectError) {
-        devLog('連線流程', '⚠️ disconnect 失敗: $disconnectError');
-        // 即使失敗也要等待
-        if (Platform.isIOS) {
-          await Future.delayed(const Duration(milliseconds: 1500));
-        }
-      }
+          // 階段2失敗：需要完整清理
+          try {
+            devLog('連線流程', '🔧 階段2失敗，執行完整清理...');
+            await device.disconnect();
+            devLog('連線流程', '✅ disconnect() 完成');
 
-      // ✅ 如果是自動重連失敗，繼續嘗試
-      if (isAutoReconnect && !_isIntentionalDisconnect) {
-        devLog('連線流程', '連線失敗，繼續重連流程...');
-        _scheduleReconnect(device);
+            if (Platform.isIOS) {
+              devLog('連線流程', '⏳ [iOS] 等待 2 秒清理...');
+              await Future.delayed(const Duration(seconds: 2));
+            } else {
+              devLog('連線流程', '⏳ [Android] 等待 1 秒...');
+              await Future.delayed(const Duration(seconds: 1));
+            }
+          } catch (disconnectError) {
+            devLog('連線流程', '⚠️ disconnect 失敗: $disconnectError');
+            if (Platform.isIOS) {
+              await Future.delayed(const Duration(seconds: 2));
+            }
+          }
+
+          if (!_isIntentionalDisconnect) {
+            devLog('連線流程', '繼續重連流程...');
+            _scheduleReconnect(device);
+          }
+        }
+      } else {
+        // 手動連線失敗，確保斷線
+        try {
+          await device.disconnect();
+        } catch (_) {}
       }
     }
   }
@@ -626,13 +655,13 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
   //     _scheduleReconnect(device);
   //   }
   // }
-
   // ═══════════════════════════════════════════════════════════════════════════
-  // ✅ 意外斷線處理（完整版）
+  // ✅ 意外斷線處理（兩段式策略版）
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> _handleUnexpectedDisconnect(BluetoothDevice device) async {
-    devLog('意外斷線', '開始處理意外斷線...');
+    devLog('意外斷線', '========== 開始處理意外斷線 ==========');
+    devLog('意外斷線', '設備: ${device.platformName}');
 
     _isConnected = false;
     _isConnecting = false;
@@ -644,65 +673,21 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     devLog('意外斷線', '當前訂閱數: ${_notifySubscriptions.length}');
     devLog('意外斷線', '當前服務數: ${state.services.length}');
 
-    // ⭐⭐⭐ 步驟 1：完整清理訂閱（優化版）⭐⭐⭐
-    if (_notifySubscriptions.isNotEmpty) {
-      devLog('意外斷線', '🔔 開始清理 ${_notifySubscriptions.length} 個訂閱...');
+    // ⭐⭐⭐ 關鍵：只清理 Dart 層，不清理藍牙層 ⭐⭐⭐
+    // 這樣可以利用 iOS 的記憶加速重連
 
-      // 1.1 先取消 StreamSubscription
-      for (var entry in _notifySubscriptions.entries) {
-        try {
-          await entry.value.cancel();
-          devLog('意外斷線', '✅ 已取消 Stream 訂閱: ${entry.key}');
-        } catch (e) {
-          devLog('意外斷線', '⚠️ 取消 Stream 訂閱失敗: $e');
-        }
-      }
-
-      // ⭐⭐⭐ 1.2 檢查設備是否還連接，再決定是否停止 notify ⭐⭐⭐
+    // 1. 取消 StreamSubscription（Dart 層清理）
+    for (var sub in _notifySubscriptions.values) {
       try {
-        final currentState = await device.connectionState.first.timeout(
-          Duration(milliseconds: 500),
-        );
-
-        if (currentState == BluetoothConnectionState.connected) {
-          // 設備還連接中，嘗試正常停止 notify
-          devLog('意外斷線', '🔗 設備仍在連接中，嘗試停止 notify');
-
-          for (var service in state.services) {
-            for (var characteristic in service.characteristics) {
-              if (characteristic.properties.notify ||
-                  characteristic.properties.indicate) {
-                if (_notifySubscriptions.containsKey(characteristic.uuid)) {
-                  try {
-                    devLog('意外斷線', '🔕 關閉 BLE 通知: ${characteristic.uuid}');
-                    await characteristic.setNotifyValue(false);
-                    devLog('意外斷線', '✅ 已關閉: ${characteristic.uuid}');
-                    await Future.delayed(const Duration(milliseconds: 100));
-                  } catch (e) {
-                    devLog('意外斷線', '⚠️ 關閉通知失敗: ${characteristic.uuid} - $e');
-                  }
-                }
-              }
-            }
-          }
-        } else {
-          // 設備已經斷開，跳過 setNotifyValue
-          devLog('意外斷線', '❌ 設備已斷開，跳過 setNotifyValue');
-          devLog('意外斷線', '🔧 依賴 disconnect() 和等待時間來清理狀態');
-        }
+        await sub.cancel();
+        devLog('意外斷線', '✅ 已取消 Stream 訂閱');
       } catch (e) {
-        devLog('意外斷線', '⚠️ 檢查連接狀態失敗: $e，跳過 setNotifyValue');
+        devLog('意外斷線', '⚠️ 取消訂閱失敗: $e');
       }
-
-      // 1.3 清空訂閱 map
-      _notifySubscriptions.clear();
-      devLog('意外斷線', '✅ 訂閱清理完成');
-
-      // 等待設備處理
-      await Future.delayed(const Duration(milliseconds: 300));
     }
+    _notifySubscriptions.clear();
 
-    // ⭐⭐⭐ 步驟 2：清理 SDK ⭐⭐⭐
+    // 2. 清理 SDK
     if (_healthCalculator != null && _currentDeviceId != null) {
       try {
         await _healthCalculator!.dispose(_currentDeviceId!);
@@ -714,52 +699,154 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     _healthCalculator = null;
     _currentDeviceId = null;
 
-    // 重置插值狀態
+    // 3. 重置插值狀態
     _firstGroupPacket = null;
     _firstGroupTimestamp = null;
     _isWaitingForSecond = false;
 
-    // 更新 UI 狀態
+    // 4. 更新 UI 狀態
     state = state.copyWith(
       clearDevice: true,
       services: [],
       readValues: {},
       notifyValues: {},
+      reconnectPhase: ReconnectPhase.quick, // ⭐ 設定為快速重連階段
     );
 
-    // ⭐⭐⭐ 步驟 3：主動斷開連接（Android 和 iOS 都要！）⭐⭐⭐
-    devLog('意外斷線', '🔧 執行 disconnect() 清理連接狀態');
-    try {
-      await device.disconnect();
-      devLog('意外斷線', '✅ disconnect() 完成');
-    } catch (e) {
-      devLog('意外斷線', '⚠️ disconnect() 失敗: $e');
-      // 即使失敗也繼續，有可能已經斷了
-    }
+    // ⭐⭐⭐ 關鍵：不呼叫 disconnect() ⭐⭐⭐
+    // 讓 iOS 保留設備記憶，加速重連
+    devLog('意外斷線', '✅ Dart 層清理完成（保留藍牙層記憶）');
+    devLog('意外斷線', '→ 準備快速重連（階段1）');
 
-    // ⭐⭐⭐ 步驟 4：等待平台清理內部狀態 ⭐⭐⭐
-    if (Platform.isIOS) {
-      devLog('意外斷線', '⏳ iOS 平台：等待 CoreBluetooth 清理...');
-      await Future.delayed(const Duration(milliseconds: 1500));
-    } else {
-      devLog('意外斷線', '⏳ Android 平台：等待狀態清理...');
-      await Future.delayed(const Duration(milliseconds: 300));
-    }
-
-    // 清理完成後再次記錄
-    devLog('意外斷線', '清理後訂閱數: ${_notifySubscriptions.length}'); // 應該是 0
-    devLog('意外斷線', '清理後服務數: ${state.services.length}'); // 應該是 0
-    devLog('意外斷線', '========== 意外斷線清理完成 ==========');
-
-    devLog('意外斷線', '✅ 全部清理完成，準備重連');
     printDebugStatus();
 
-    // ✅ 啟動自動重連
+    // ✅ 啟動兩段式重連
     _scheduleReconnect(device);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // ✅ 排程重連（改用掃描模式）
+  // ✅ 新增：階段1 - 快速重連（利用 iOS 記憶）
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<bool> _quickReconnect(BluetoothDevice device) async {
+    devLog('快速重連', '========== 階段1：快速重連 ==========');
+
+    final deviceId = device.remoteId.str;
+    final deviceName = device.platformName;
+
+    // ⭐⭐⭐ 步驟1：檢查幽靈連線（iOS 專用）⭐⭐⭐
+    if (Platform.isIOS) {
+      devLog('快速重連', '🍎 [iOS] 步驟1：檢查幽靈連線...');
+
+      final ghostDevice = await _tryRetrieveSystemConnectedDevice(deviceId);
+
+      if (ghostDevice != null) {
+        devLog('快速重連', '✅ 發現幽靈連線！嘗試直接使用...');
+
+        try {
+          // 檢查連線狀態
+          final connState = await ghostDevice.connectionState.first.timeout(
+            const Duration(seconds: 2),
+          );
+
+          if (connState == BluetoothConnectionState.connected) {
+            devLog('快速重連', '✅ 幽靈連線狀態正常，直接完成連線流程！');
+            await _completeConnection(ghostDevice);
+
+            state = state.copyWith(
+              reconnectPhase: ReconnectPhase.none,
+              isReconnecting: false,
+              reconnectAttempts: 0,
+            );
+
+            return true;
+          } else {
+            devLog('快速重連', '⚠️ 幽靈連線狀態異常: $connState，嘗試重新連線...');
+
+            // 嘗試對幽靈連線裝置進行連線
+            await ghostDevice.connect(
+              autoConnect: false,
+              timeout: const Duration(seconds: 8),
+            );
+
+            final newState = await ghostDevice.connectionState.first.timeout(
+              const Duration(seconds: 2),
+            );
+
+            if (newState == BluetoothConnectionState.connected) {
+              devLog('快速重連', '✅ 幽靈連線重新連線成功！');
+              await _completeConnection(ghostDevice);
+
+              state = state.copyWith(
+                reconnectPhase: ReconnectPhase.none,
+                isReconnecting: false,
+                reconnectAttempts: 0,
+              );
+
+              return true;
+            }
+          }
+        } catch (e) {
+          devLog('快速重連', '⚠️ 使用幽靈連線失敗: $e');
+
+          // 清理幽靈連線
+          try {
+            devLog('快速重連', '🔧 清理幽靈連線...');
+            await ghostDevice.disconnect();
+            await Future.delayed(const Duration(seconds: 1));
+          } catch (disconnectError) {
+            devLog('快速重連', '⚠️ 清理幽靈連線失敗: $disconnectError');
+          }
+        }
+      } else {
+        devLog('快速重連', '📭 無幽靈連線');
+      }
+    }
+
+    // ⭐⭐⭐ 步驟2：使用 fromId 直接連線 ⭐⭐⭐
+    devLog('快速重連', '🚀 步驟2：使用 fromId 直接連線...');
+
+    try {
+      final quickDevice = BluetoothDevice.fromId(deviceId);
+
+      final timeout = Platform.isIOS ? 8 : 5;
+
+      await quickDevice.connect(
+        autoConnect: false,
+        timeout: Duration(seconds: timeout),
+      );
+
+      // 驗證連接狀態
+      final connState = await quickDevice.connectionState.first.timeout(
+        const Duration(seconds: 2),
+      );
+
+      if (connState == BluetoothConnectionState.connected) {
+        devLog('快速重連', '✅ 快速重連成功！');
+
+        await _completeConnection(quickDevice);
+
+        state = state.copyWith(
+          reconnectPhase: ReconnectPhase.none,
+          isReconnecting: false,
+          reconnectAttempts: 0,
+        );
+
+        return true;
+      } else {
+        devLog('快速重連', '❌ 連接狀態異常: $connState');
+        return false;
+      }
+    } catch (e) {
+      devLog('快速重連', '❌ 快速重連失敗: $e');
+      devLog('快速重連', '→ 準備進入階段2（完整清理）');
+
+      return false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ 修改：排程重連（兩段式策略）
   // ═══════════════════════════════════════════════════════════════════════════
 
   void _scheduleReconnect(BluetoothDevice device) {
@@ -772,18 +859,32 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
       state = state.copyWith(
         isReconnecting: false,
         reconnectAttempts: 0,
+        reconnectPhase: ReconnectPhase.none,
       );
       return;
     }
 
     _reconnectAttempts++;
 
-    // ✅ iOS 需要更長的重連間隔
-    final waitSeconds = Platform.isIOS ? 5 : 3;
+    // ⭐⭐⭐ 根據階段決定等待時間和策略 ⭐⭐⭐
+    final currentPhase = state.reconnectPhase;
+
+    int waitSeconds;
+    String strategyDesc;
+
+    if (currentPhase == ReconnectPhase.quick) {
+      // 階段1：快速重連，較短等待
+      waitSeconds = Platform.isIOS ? 2 : 1;
+      strategyDesc = '快速重連（利用記憶）';
+    } else {
+      // 階段2：完整清理，較長等待
+      waitSeconds = Platform.isIOS ? 5 : 3;
+      strategyDesc = '完整清理重連';
+    }
 
     devLog(
       '自動重連',
-      '⏳ $waitSeconds秒後開始第 $_reconnectAttempts/$_maxReconnectAttempts 次重連掃描...',
+      '⏳ ${waitSeconds}秒後開始第 $_reconnectAttempts/$_maxReconnectAttempts 次重連 [$strategyDesc]',
     );
 
     state = state.copyWith(
@@ -794,7 +895,11 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     _reconnectTimer = Timer(Duration(seconds: waitSeconds), () async {
       if (_isIntentionalDisconnect) {
         devLog('自動重連', '✋ 使用者已手動斷線，取消重連');
-        state = state.copyWith(isReconnecting: false, reconnectAttempts: 0);
+        state = state.copyWith(
+          isReconnecting: false,
+          reconnectAttempts: 0,
+          reconnectPhase: ReconnectPhase.none,
+        );
         return;
       }
 
@@ -803,9 +908,79 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
         return;
       }
 
-      // ✅ 開始掃描尋找目標裝置
-      await _startReconnectScan(device);
+      // ⭐⭐⭐ 根據階段執行不同的重連策略 ⭐⭐⭐
+      if (currentPhase == ReconnectPhase.quick) {
+        // 階段1：嘗試快速重連
+        final success = await _quickReconnect(device);
+
+        if (!success) {
+          // 快速重連失敗，切換到階段2
+          devLog('自動重連', '⚠️ 階段1失敗，切換到階段2（完整清理）');
+
+          state = state.copyWith(
+            reconnectPhase: ReconnectPhase.full,
+          );
+
+          // 進入完整清理流程
+          await _startFullCleanReconnect(device);
+        }
+      } else {
+        // 階段2：完整清理重連
+        await _startFullCleanReconnect(device);
+      }
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ 新增：階段2 - 完整清理重連
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<void> _startFullCleanReconnect(BluetoothDevice device) async {
+    devLog('完整重連', '========== 階段2：完整清理重連 ==========');
+    devLog('完整重連', '策略：disconnect + 等待 + 掃描');
+
+    // ⭐⭐⭐ 步驟1：徹底清理藍牙狀態 ⭐⭐⭐
+    try {
+      devLog('完整重連', '🔧 執行 disconnect() 清理藍牙狀態...');
+      await device.disconnect();
+      devLog('完整重連', '✅ disconnect() 完成');
+
+      // iOS 需要較長等待時間
+      if (Platform.isIOS) {
+        devLog('完整重連', '⏳ [iOS] 等待 3 秒清理狀態...');
+        await Future.delayed(const Duration(seconds: 3));
+
+        // 檢查系統連接
+        try {
+          final connectedDevices = FlutterBluePlus.connectedDevices;
+          for (var dev in connectedDevices) {
+            if (dev.remoteId.str == device.remoteId.str) {
+              devLog('完整重連', '⚠️ 發現殘留連接，再次斷開');
+              await dev.disconnect();
+              await Future.delayed(const Duration(milliseconds: 500));
+            }
+          }
+        } catch (e) {
+          devLog('完整重連', '系統檢查失敗: $e');
+        }
+
+        devLog('完整重連', '✅ [iOS] 清理完成');
+      } else {
+        devLog('完整重連', '⏳ [Android] 等待 1 秒...');
+        await Future.delayed(const Duration(seconds: 1));
+      }
+    } catch (e) {
+      devLog('完整重連', '⚠️ disconnect 失敗: $e');
+      // 即使失敗也要等待
+      if (Platform.isIOS) {
+        await Future.delayed(const Duration(seconds: 3));
+      } else {
+        await Future.delayed(const Duration(seconds: 1));
+      }
+    }
+
+    // ⭐⭐⭐ 步驟2：開始掃描 ⭐⭐⭐
+    await _startReconnectScan(device);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -844,6 +1019,65 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     } catch (e) {
       devLog('直接連線', '🍎 [iOS] 連線失敗: $e');
       return false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ 修正：檢查系統幽靈連線（iOS 專用）
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// 檢查 iOS 系統層是否有「幽靈連線」
+  /// 返回：如果找到目標裝置的幽靈連線，返回該裝置；否則返回 null
+  Future<BluetoothDevice?> _tryRetrieveSystemConnectedDevice(
+    String targetRemoteId,
+  ) async {
+    devLog('幽靈連線檢查', '========== 開始檢查系統幽靈連線 ==========');
+    devLog('幽靈連線檢查', '目標裝置 ID: $targetRemoteId');
+
+    try {
+      // ✅ 方法1：使用 connectedDevices（不需要 Service UUID，推薦！）
+      devLog('幽靈連線檢查', '🔍 查詢 connectedDevices...');
+
+      final connectedDevices = FlutterBluePlus.connectedDevices;
+      devLog('幽靈連線檢查', '找到 ${connectedDevices.length} 個已連線裝置');
+
+      for (var device in connectedDevices) {
+        devLog('幽靈連線檢查', '  - ${device.platformName} (${device.remoteId.str})');
+
+        if (device.remoteId.str == targetRemoteId) {
+          devLog('幽靈連線檢查', '✅ 找到幽靈連線！裝置: ${device.platformName}');
+          return device;
+        }
+      }
+
+      // ✅ 方法2：如果有記住上次的 Service UUID，也可以用 systemDevices
+      // 這是可選的，因為 connectedDevices 通常就夠用了
+      if (Platform.isIOS && _lastConnectedServiceUuids.isNotEmpty) {
+        devLog('幽靈連線檢查', '🔍 查詢 systemDevices (使用記住的 Service UUIDs)...');
+
+        final systemDevices = await FlutterBluePlus.systemDevices(
+          _lastConnectedServiceUuids,
+        );
+        devLog('幽靈連線檢查', '找到 ${systemDevices.length} 個系統層裝置');
+
+        for (var device in systemDevices) {
+          devLog(
+            '幽靈連線檢查',
+            '  - ${device.platformName} (${device.remoteId.str})',
+          );
+
+          if (device.remoteId.str == targetRemoteId) {
+            devLog('幽靈連線檢查', '✅ 找到幽靈連線！裝置: ${device.platformName}');
+            return device;
+          }
+        }
+      }
+
+      devLog('幽靈連線檢查', '❌ 未找到幽靈連線');
+      return null;
+    } catch (e) {
+      devLog('幽靈連線檢查', '❌ 查詢失敗: $e');
+      return null;
     }
   }
 
@@ -890,144 +1124,6 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     }
   }
 
-  // // ═══════════════════════════════════════════════════════════════════════════
-  // // ✅ 修改：重連掃描邏輯（先嘗試直接連線）
-  // // ═══════════════════════════════════════════════════════════════════════════
-
-  // Future<void> _startReconnectScan(BluetoothDevice targetDevice) async {
-  //   final targetDeviceId = targetDevice.remoteId.str;
-  //   final targetDeviceName = targetDevice.platformName;
-
-  //   // ✅ 先嘗試直接連線（不需掃描）
-  //   devLog('自動重連', '🚀 先嘗試直接連線到: $targetDeviceName');
-
-  //   // ✅ iOS 專用：先嘗試直接連線（不需掃描）
-  //   // iOS 會記住已配對的裝置，可以直接透過 ID 連線
-  //   if (Platform.isIOS) {
-  //     devLog('自動重連', '🍎 [iOS] 嘗試直接連線（不掃描）...');
-
-  //     try {
-  //       final device = BluetoothDevice.fromId(targetDeviceId);
-
-  //       // ⭐ iOS 上使用較短的超時時間（改為 8 秒）
-  //       await device.connect(
-  //         autoConnect: false,
-  //         timeout: const Duration(seconds: 8), // ⭐ 從 15 秒改為 8 秒
-  //       );
-
-  //       // 檢查是否真的連上了
-  //       final currentState = await device.connectionState.first;
-  //       if (currentState == BluetoothConnectionState.connected) {
-  //         devLog('自動重連', '🍎 [iOS] 直接連線成功！');
-  //         await _completeConnection(device);
-  //         return;
-  //       }
-  //     } catch (e) {
-  //       devLog('自動重連', '🍎 [iOS] 直接連線失敗: $e，改用掃描模式');
-
-  //       // ⭐ 直接連線失敗後也要 disconnect + 等待
-  //       try {
-  //         final device = BluetoothDevice.fromId(targetDeviceId);
-  //         await device.disconnect();
-  //         devLog('自動重連', '✅ [iOS] 已執行 disconnect');
-  //       } catch (_) {}
-  //     }
-
-  //     // ✅ iOS 直接連線失敗後，等待更長時間再掃描
-  //     devLog('自動重連', '🍎 [iOS] 等待 2 秒讓系統釋放資源...');
-  //     await Future.delayed(const Duration(seconds: 2)); // ⭐ 從 3 秒改為 2 秒
-  //   }
-  //   if (Platform.isAndroid) {
-  //     try {
-  //       final device = BluetoothDevice.fromId(targetDeviceId);
-
-  //       // 設定較短的超時時間
-  //       await device.connect(
-  //         autoConnect: false,
-  //         timeout: const Duration(seconds: 10),
-  //       );
-
-  //       // 如果連線成功
-  //       if (await device.connectionState.first ==
-  //           BluetoothConnectionState.connected) {
-  //         devLog('自動重連', '✅ 直接連線成功！');
-
-  //         // 繼續完成連線流程
-  //         await _completeConnection(device);
-  //         return;
-  //       }
-  //     } catch (e) {
-  //       devLog('自動重連', '⚠️ 直接連線失敗，改用掃描模式: $e');
-  //     }
-  //   }
-
-  //   // ✅ 直接連線失敗，才開始掃描
-  //   devLog(
-  //     '自動重連',
-  //     '🔍 開始掃描 $_scanTimeoutSeconds 秒，尋找裝置: $targetDeviceName ($targetDeviceId)',
-  //   );
-
-  //   try {
-  //     await FlutterBluePlus.stopScan();
-  //   } catch (_) {}
-
-  //   bool deviceFound = false;
-
-  //   final scanTimeoutTimer = Timer(Duration(seconds: _scanTimeoutSeconds), () {
-  //     if (!deviceFound) {
-  //       devLog('自動重連', '⏰ 掃描 $_scanTimeoutSeconds 秒超時，未找到裝置');
-  //       _reconnectScanSubscription?.cancel();
-  //       FlutterBluePlus.stopScan();
-
-  //       if (!_isIntentionalDisconnect) {
-  //         _scheduleReconnect(targetDevice);
-  //       }
-  //     }
-  //   });
-
-  //   // FlutterBluePlus.startScan(timeout: Duration(seconds: _scanTimeoutSeconds));
-
-  //   // ✅ iOS 專用：使用更寬鬆的掃描設定
-  //   if (Platform.isIOS) {
-  //     FlutterBluePlus.startScan(
-  //       timeout: Duration(seconds: _scanTimeoutSeconds),
-  //     );
-  //   } else {
-  //     FlutterBluePlus.startScan(
-  //       timeout: Duration(seconds: _scanTimeoutSeconds),
-  //     );
-  //   }
-
-  //   _reconnectScanSubscription = FlutterBluePlus.scanResults.listen((
-  //     results,
-  //   ) async {
-  //     if (deviceFound || _isIntentionalDisconnect) return;
-
-  //     for (final result in results) {
-  //       final foundDeviceId = result.device.remoteId.str;
-
-  //       if (foundDeviceId == targetDeviceId) {
-  //         deviceFound = true;
-
-  //         devLog('自動重連', '✅ 掃描找到目標裝置: ${result.device.platformName}');
-
-  //         scanTimeoutTimer.cancel();
-  //         _reconnectScanSubscription?.cancel();
-  //         await FlutterBluePlus.stopScan();
-
-  //         // ✅ iOS 上需要更長的等待時間
-  //         final waitTime = Platform.isIOS ? 1500 : 500;
-  //         await Future.delayed(Duration(milliseconds: waitTime));
-
-  //         devLog('自動重連', '🔄 開始連線...');
-  //         await connectToDevice(result.device, isAutoReconnect: true);
-
-  //         break;
-  //       }
-  //     }
-  //   });
-  // }
-
   // ═══════════════════════════════════════════════════════════════════════════
   // ✅ 重連掃描邏輯（簡化優化版）
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1036,8 +1132,11 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     final targetDeviceId = targetDevice.remoteId.str;
     final targetDeviceName = targetDevice.platformName;
 
-    devLog('自動重連', '========== 開始重連流程 ==========');
-    devLog('自動重連', '目標: $targetDeviceName ($targetDeviceId)');
+    // devLog('自動重連', '========== 開始重連流程 ==========');
+    // devLog('自動重連', '目標: $targetDeviceName ($targetDeviceId)');
+
+    devLog('掃描重連', '========== 開始掃描重連 =========='); // ⭐ 加這行
+    devLog('掃描重連', '目標: $targetDeviceName ($targetDeviceId)'); // ⭐ 改這行
 
     // ⭐⭐⭐ 策略：iOS 和 Android 統一使用掃描 ⭐⭐⭐
     // 不再嘗試直接連線，因為在狀態未清理時會失敗
@@ -1126,6 +1225,11 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
           .discoverServices();
       devLog('連線流程', '✅ 發現 ${discoveredServices.length} 個服務');
 
+      // ✅ 新增：記住這些服務的 UUID（用於下次幽靈連線檢查）
+      _lastConnectedServiceUuids = discoveredServices
+          .map((s) => s.uuid)
+          .toList();
+
       await Future.delayed(const Duration(milliseconds: 300));
 
       _currentDeviceId = device.remoteId.str;
@@ -1194,6 +1298,7 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     state = state.copyWith(
       isReconnecting: false,
       reconnectAttempts: 0,
+      reconnectPhase: ReconnectPhase.none, // ⭐ 加這行
     );
     devLog('自動重連', '已取消自動重連');
   }
@@ -1298,91 +1403,6 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     printDebugStatus();
   }
 
-  // // ═══════════════════════════════════════════════════════════════════════════
-  // // 修改 connectToLastDevice：加入保護機制
-  // // ═══════════════════════════════════════════════════════════════════════════
-
-  // Future<bool> connectToLastDevice() async {
-  //   if (_lastConnectedDevice == null) {
-  //     devLog('快速重連', '❌ 沒有上次連線的裝置資訊');
-  //     return false;
-  //   }
-
-  //   // ✅ 檢查保護機制
-  //   if (!await canConnect()) {
-  //     devLog('快速重連', '⚠️ 操作被保護機制阻擋');
-  //     return false;
-  //   }
-
-  //   final targetDeviceId = _lastConnectedDevice!.remoteId.str;
-  //   final targetDeviceName = _lastConnectedDevice!.platformName;
-
-  //   devLog('快速重連', '🔍 快速掃描尋找: $targetDeviceName ($targetDeviceId)');
-
-  //   try {
-  //     await FlutterBluePlus.stopScan();
-  //   } catch (_) {}
-
-  //   await Future.delayed(const Duration(milliseconds: 500));
-
-  //   const quickScanSeconds = 10;
-  //   bool deviceFound = false;
-  //   BluetoothDevice? foundDevice;
-
-  //   final completer = Completer<bool>();
-
-  //   final timeoutTimer = Timer(const Duration(seconds: quickScanSeconds), () {
-  //     if (!completer.isCompleted) {
-  //       devLog('快速重連', '⏰ 快速掃描超時，未找到裝置');
-  //       completer.complete(false);
-  //     }
-  //   });
-
-  //   FlutterBluePlus.startScan(
-  //     timeout: const Duration(seconds: quickScanSeconds),
-  //   );
-
-  //   final subscription = FlutterBluePlus.scanResults.listen((results) {
-  //     if (deviceFound || completer.isCompleted) return;
-
-  //     for (final result in results) {
-  //       if (result.device.remoteId.str == targetDeviceId) {
-  //         deviceFound = true;
-  //         foundDevice = result.device;
-  //         devLog(
-  //           '快速重連',
-  //           '✅ 找到裝置: ${result.device.platformName} (RSSI: ${result.rssi})',
-  //         );
-
-  //         if (!completer.isCompleted) {
-  //           completer.complete(true);
-  //         }
-  //         break;
-  //       }
-  //     }
-  //   });
-
-  //   final found = await completer.future;
-
-  //   timeoutTimer.cancel();
-  //   await subscription.cancel();
-  //   await FlutterBluePlus.stopScan();
-
-  //   if (!found || foundDevice == null) {
-  //     devLog('快速重連', '❌ 裝置不在範圍內');
-  //     return false;
-  //   }
-
-  //   // ✅ 找到裝置後，再等待一下讓裝置準備好
-  //   devLog('快速重連', '⏳ 等待裝置準備...');
-  //   await Future.delayed(const Duration(milliseconds: 1000));
-
-  //   devLog('快速重連', '🚀 開始連線...');
-  //   await connectToDevice(foundDevice!, isAutoReconnect: false);
-
-  //   return _isConnected;
-  // }
-
   // ═══════════════════════════════════════════════════════════════════════════
   // ✅ 修改：connectToLastDevice（針對 iOS 優化）
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1402,30 +1422,83 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     final targetDeviceId = _lastConnectedDevice!.remoteId.str;
     final targetDeviceName = _lastConnectedDevice!.platformName;
 
-    // ✅ iOS 專用：先檢查是否已經在系統層級連線
+    devLog('快速重連', '========== 手動快速重連 ==========');
+    devLog('快速重連', '目標: $targetDeviceName ($targetDeviceId)');
+
+    // ⭐⭐⭐ 步驟1：檢查幽靈連線（iOS 專用）⭐⭐⭐
     if (Platform.isIOS) {
-      final existingDevice = await findConnectedDevice(targetDeviceId);
-      if (existingDevice != null) {
-        devLog('快速重連', '🍎 [iOS] 裝置已在系統層級連線，直接使用');
-        await _completeConnection(existingDevice);
-        return _isConnected;
-      }
+      devLog('快速重連', '🍎 [iOS] 檢查幽靈連線...');
 
-      // ✅ iOS：嘗試直接連線（不掃描）
-      devLog('快速重連', '🍎 [iOS] 嘗試直接連線（不掃描）...');
-      final directConnectSuccess = await connectToKnownDevice(targetDeviceId);
-      if (directConnectSuccess) {
-        return true;
-      }
+      final ghostDevice = await _tryRetrieveSystemConnectedDevice(
+        targetDeviceId,
+      );
 
-      devLog('快速重連', '🍎 [iOS] 直接連線失敗，改用掃描模式');
+      if (ghostDevice != null) {
+        devLog('快速重連', '✅ 發現幽靈連線！');
+
+        try {
+          final connState = await ghostDevice.connectionState.first.timeout(
+            const Duration(seconds: 2),
+          );
+
+          if (connState == BluetoothConnectionState.connected) {
+            devLog('快速重連', '✅ 幽靈連線狀態正常，直接使用！');
+            await _completeConnection(ghostDevice);
+            return _isConnected;
+          } else {
+            devLog('快速重連', '⚠️ 幽靈連線狀態: $connState，嘗試連線...');
+            await ghostDevice.connect(
+              autoConnect: false,
+              timeout: const Duration(seconds: 10),
+            );
+            await _completeConnection(ghostDevice);
+            return _isConnected;
+          }
+        } catch (e) {
+          devLog('快速重連', '⚠️ 幽靈連線失敗: $e，清理後繼續...');
+          try {
+            await ghostDevice.disconnect();
+          } catch (_) {}
+          await Future.delayed(const Duration(seconds: 1));
+        }
+      }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // 掃描模式
-    // ═══════════════════════════════════════════════════════════════════════
+    // ⭐⭐⭐ 步驟2：檢查 connectedDevices ⭐⭐⭐
+    final existingDevice = await findConnectedDevice(targetDeviceId);
+    if (existingDevice != null) {
+      devLog('快速重連', '✅ 裝置已在系統層級連線，直接使用');
+      await _completeConnection(existingDevice);
+      return _isConnected;
+    }
 
-    devLog('快速重連', '🔍 快速掃描尋找: $targetDeviceName ($targetDeviceId)');
+    // ⭐⭐⭐ 步驟3：嘗試直接連線（不掃描）⭐⭐⭐
+    devLog('快速重連', '🚀 嘗試直接連線（不掃描）...');
+
+    try {
+      final device = BluetoothDevice.fromId(targetDeviceId);
+      final timeout = Platform.isIOS ? 15 : 10;
+
+      await device.connect(
+        autoConnect: false,
+        timeout: Duration(seconds: timeout),
+      );
+
+      final connState = await device.connectionState.first.timeout(
+        const Duration(seconds: 2),
+      );
+
+      if (connState == BluetoothConnectionState.connected) {
+        devLog('快速重連', '✅ 直接連線成功！');
+        await _completeConnection(device);
+        return _isConnected;
+      }
+    } catch (e) {
+      devLog('快速重連', '⚠️ 直接連線失敗: $e，改用掃描模式');
+    }
+
+    // ⭐⭐⭐ 步驟4：掃描模式（最後手段）⭐⭐⭐
+    devLog('快速重連', '🔍 使用掃描模式...');
 
     try {
       await FlutterBluePlus.stopScan();
@@ -1433,7 +1506,6 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
 
     await Future.delayed(const Duration(milliseconds: 500));
 
-    // ✅ iOS 使用更長的掃描時間
     final quickScanSeconds = Platform.isIOS ? 15 : 10;
     bool deviceFound = false;
     BluetoothDevice? foundDevice;
@@ -1442,21 +1514,14 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
 
     final timeoutTimer = Timer(Duration(seconds: quickScanSeconds), () {
       if (!completer.isCompleted) {
-        devLog('快速重連', '⏰ 快速掃描超時，未找到裝置');
+        devLog('快速重連', '⏰ 掃描超時，未找到裝置');
         completer.complete(false);
       }
     });
 
-    // ✅ iOS 使用 allowDuplicates
-    if (Platform.isIOS) {
-      FlutterBluePlus.startScan(
-        timeout: Duration(seconds: quickScanSeconds),
-      );
-    } else {
-      FlutterBluePlus.startScan(
-        timeout: Duration(seconds: quickScanSeconds),
-      );
-    }
+    FlutterBluePlus.startScan(
+      timeout: Duration(seconds: quickScanSeconds),
+    );
 
     final subscription = FlutterBluePlus.scanResults.listen((results) {
       if (deviceFound || completer.isCompleted) return;
@@ -1489,7 +1554,6 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
       return false;
     }
 
-    // ✅ iOS 需要更長的等待時間
     final waitTime = Platform.isIOS ? 1500 : 1000;
     devLog('快速重連', '⏳ 等待裝置準備 (${waitTime}ms)...');
     await Future.delayed(Duration(milliseconds: waitTime));
@@ -1996,6 +2060,8 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
     _isDisconnecting = false;
     _isTogglingNotify = false;
     _isIntentionalDisconnect = true;
+
+    _lastConnectedServiceUuids.clear();
 
     _statsTimer?.cancel();
     disconnectFromDevice();
