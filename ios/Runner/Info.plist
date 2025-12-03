@@ -25,6 +25,8 @@
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
+
+	
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>此應用程式需要使用藍牙以連接並與外部裝置（例如心率感測器或配件）通訊，提供應用的核心功能。</string>
@@ -37,7 +39,10 @@
 	<string>此應用程式需要在前景與背景持續存取位置，以支援背景藍牙連線與穩定的裝置同步（例如持續監測和維持與外部配件的連線）。</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
 	<key>UIBackgroundModes</key>
+
+
 	<array>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>

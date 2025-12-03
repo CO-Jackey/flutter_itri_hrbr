@@ -460,8 +460,14 @@ class _DataMatchViewPageState extends ConsumerState<DataMatchViewPage> {
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           const Text('濕度'),
+          const SizedBox(height: 10),
           Text(
-            '${health.hum}',
+            '${health.temp}',
+            style: Theme.of(context).textTheme.headlineMedium,
+          ),
+          const Text('步數'),
+          Text(
+            '${health.step}',
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           const Text('電量'),
