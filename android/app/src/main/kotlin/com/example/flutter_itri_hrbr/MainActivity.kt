@@ -386,57 +386,57 @@ class MainActivity: FlutterActivity() {
                 //     result.success(null)
                 // }
 
-                "dispose" -> {
-                    val deviceId: String? = call.argument("deviceId")
+                // "dispose" -> {
+                //     val deviceId: String? = call.argument("deviceId")
                     
-                    if (deviceId != null) {
-                        // ✅ 清理特定設備的所有相關資源
-                        synchronized(healthCalculators) {
-                            healthCalculators.remove(deviceId)
-                            println("[KT] 🗑️ 已清理設備 $deviceId 的 HealthCalculate 實例")
-                        }
-                        synchronized(sdkLocks) {
-                            sdkLocks.remove(deviceId)
-                            println("[KT] 🗑️ 已清理設備 $deviceId 的鎖")
-                        }
-                        synchronized(processingFlags) {
-                            processingFlags.remove(deviceId)
-                        }
-                    } else {
-                        // 清理所有實例
-                        synchronized(healthCalculators) {
-                            healthCalculators.clear()
-                            println("[KT] 🗑️ 已清理所有 HealthCalculate 實例")
-                        }
-                        synchronized(sdkLocks) {
-                            sdkLocks.clear()
-                            println("[KT] 🗑️ 已清理所有鎖")
-                        }
-                        synchronized(processingFlags) {
-                            processingFlags.clear()
-                        }
-                    }
+                //     if (deviceId != null) {
+                //         // ✅ 清理特定設備的所有相關資源
+                //         synchronized(healthCalculators) {
+                //             healthCalculators.remove(deviceId)
+                //             println("[KT] 🗑️ 已清理設備 $deviceId 的 HealthCalculate 實例")
+                //         }
+                //         synchronized(sdkLocks) {
+                //             sdkLocks.remove(deviceId)
+                //             println("[KT] 🗑️ 已清理設備 $deviceId 的鎖")
+                //         }
+                //         synchronized(processingFlags) {
+                //             processingFlags.remove(deviceId)
+                //         }
+                //     } else {
+                //         // 清理所有實例
+                //         synchronized(healthCalculators) {
+                //             healthCalculators.clear()
+                //             println("[KT] 🗑️ 已清理所有 HealthCalculate 實例")
+                //         }
+                //         synchronized(sdkLocks) {
+                //             sdkLocks.clear()
+                //             println("[KT] 🗑️ 已清理所有鎖")
+                //         }
+                //         synchronized(processingFlags) {
+                //             processingFlags.clear()
+                //         }
+                //     }
                     
-                    result.success(null)
-                }
+                //     result.success(null)
+                // }
                 
                 // ✅ 新增：重置特定設備（不用 dispose，直接重建）
-                "reset" -> {
-                    val deviceId: String? = call.argument("deviceId")
+                // "reset" -> {
+                //     val deviceId: String? = call.argument("deviceId")
                     
-                    if (deviceId != null) {
-                        synchronized(healthCalculators) {
-                            // 移除舊的
-                            healthCalculators.remove(deviceId)
-                            // 建立新的
-                            healthCalculators[deviceId] = HealthCalculate(3)
-                            println("[KT] 🔄 已重置設備 $deviceId 的 HealthCalculate 實例")
-                        }
-                        result.success(true)
-                    } else {
-                        result.error("INVALID_ARGUMENT", "DeviceId is required for reset.", null)
-                    }
-                }
+                //     if (deviceId != null) {
+                //         synchronized(healthCalculators) {
+                //             // 移除舊的
+                //             healthCalculators.remove(deviceId)
+                //             // 建立新的
+                //             healthCalculators[deviceId] = HealthCalculate(3)
+                //             println("[KT] 🔄 已重置設備 $deviceId 的 HealthCalculate 實例")
+                //         }
+                //         result.success(true)
+                //     } else {
+                //         result.error("INVALID_ARGUMENT", "DeviceId is required for reset.", null)
+                //     }
+                // }
 
                 // ✅ 新增：檢查 SDK 實例狀態
                 "getStatus" -> {

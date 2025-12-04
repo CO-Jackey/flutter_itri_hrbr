@@ -219,7 +219,7 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
       // ⚠️ 注意：參考 muti disconnectAll() 的做法
       // 不在斷線前呼叫 setNotifyValue(false)
       // 直接斷線，讓連線監聽器處理後續清理
-      // await _stopAllNotifications();
+      await _stopAllNotifications();
 
       // 🔌 執行斷線（參考 muti line 655）
       await state.connectedDevice?.disconnect();
@@ -235,24 +235,45 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     }
   }
 
-  // ⭐ 新增：正確關閉所有 notify（通知藍牙裝置停止發送）
+  // ⭐ 修正：正確關閉所有 notify
   Future<void> _stopAllNotifications() async {
-    if (state.services.isEmpty) return;
+    if (_notifySubscriptions.isEmpty) return;
 
-    for (final service in state.services) {
-      for (final c in service.characteristics) {
-        if (_notifySubscriptions.containsKey(c.uuid)) {
-          try {
-            await _notifySubscriptions[c.uuid]?.cancel();
-            await c.setNotifyValue(false);
-            devLog('Notify', '❌ ${c.uuid} 已關閉 notify');
-          } catch (e) {
-            devLog('Notify', '關閉 ${c.uuid} notify 失敗: $e');
+    devLog('Notify', '🔇 開始關閉所有通知 (${_notifySubscriptions.length} 個)...');
+
+    // 複製一份 keys，避免在迭代時修改 map
+    final uuidsToCancel = List<Guid>.from(_notifySubscriptions.keys);
+
+    for (final uuid in uuidsToCancel) {
+      try {
+        // 1. 取消 Stream 訂閱
+        await _notifySubscriptions[uuid]?.cancel();
+        devLog('Notify', '已取消 Stream 訂閱: $uuid');
+      } catch (e) {
+        devLog('Notify', '取消 Stream 訂閱失敗: $uuid - $e');
+      }
+    }
+
+    // 2. 清空 map
+    _notifySubscriptions.clear();
+
+    // 3. 關閉 BLE 通知（如果裝置還在連線）
+    if (state.connectedDevice != null && state.services.isNotEmpty) {
+      for (final service in state.services) {
+        for (final c in service.characteristics) {
+          if (uuidsToCancel.contains(c.uuid)) {
+            try {
+              await c.setNotifyValue(false);
+              devLog('Notify', '已關閉 BLE 通知: ${c.uuid}');
+            } catch (e) {
+              devLog('Notify', '關閉 BLE 通知失敗: ${c.uuid} - $e');
+            }
           }
         }
       }
     }
-    _notifySubscriptions.clear();
+
+    devLog('Notify', '✅ 所有通知已關閉');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -376,47 +397,88 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 訂閱通知（參考 data_match_service 的詳細邏輯）
+  // 訂閱通知（修正：使用獨立的 Stream 訂閱）
   // ═══════════════════════════════════════════════════════════════════════════
 
   bool isNotifying(Guid uuid) => _notifySubscriptions.containsKey(uuid);
 
   Future<void> toggleNotify(BluetoothCharacteristic c) async {
     if (_notifySubscriptions.containsKey(c.uuid)) {
+      // ═══════════════════════════════════════════════════════════════════════
       // 關閉通知
-      await _notifySubscriptions[c.uuid]?.cancel();
-      await c.setNotifyValue(false);
-      _notifySubscriptions.remove(c.uuid);
-      devLog('Notify', '❌ ${c.uuid} 已關閉');
-    } else {
-      // 開啟通知
+      // ═══════════════════════════════════════════════════════════════════════
       try {
+        // 1. 先取消 Stream 訂閱
+        await _notifySubscriptions[c.uuid]?.cancel();
+        _notifySubscriptions.remove(c.uuid);
+
+        // 2. 再關閉 BLE 通知
+        await c.setNotifyValue(false);
+
+        devLog('Notify', '❌ ${c.uuid} 已關閉');
+      } catch (e) {
+        devLog('Notify', '關閉 ${c.uuid} 失敗: $e');
+        // 確保從 map 中移除
+        _notifySubscriptions.remove(c.uuid);
+      }
+    } else {
+      // ═══════════════════════════════════════════════════════════════════════
+      // 開啟通知
+      // ═══════════════════════════════════════════════════════════════════════
+      try {
+        // ✅ 關鍵修正：先建立監聽器，再開啟通知
+        // 使用 onValueReceived 而不是 lastValueStream
+        // onValueReceived 是獨立的 Stream，不會與其他監聽者共享
+
+        // 1. 先建立獨立的 Stream 訂閱
+        final sub = c.onValueReceived.listen(
+          (value) async {
+            // ✅ 加入檢查：確保是這個 Service 的訂閱
+            if (!_notifySubscriptions.containsKey(c.uuid)) {
+              devLog('Notify', '⚠️ 收到資料但訂閱已取消，忽略');
+              return;
+            }
+
+
+            _dataCount++;
+            devLog('資料次數原始數據', '收到資料次數: $_dataCount');
+
+            devLog('資料次數原始數據', '[Simple] ${c.uuid}: $value');
+
+            // 更新 UI 上顯示的原始值
+            final newNotifyValues = Map<Guid, List<int>>.from(
+              state.notifyValues,
+            );
+            newNotifyValues[c.uuid] = value;
+            state = state.copyWith(notifyValues: newNotifyValues);
+
+            // 數據處理
+            if (_healthCalculator != null && _currentDeviceId != null) {
+              await _processData(value);
+            }
+          },
+          onError: (error) {
+            devLog('Notify', '❌ ${c.uuid} 接收資料錯誤: $error');
+          },
+          onDone: () {
+            devLog('Notify', '🔇 ${c.uuid} Stream 已結束');
+            _notifySubscriptions.remove(c.uuid);
+          },
+          cancelOnError: false,
+        );
+
+        // 2. 儲存訂閱
+        _notifySubscriptions[c.uuid] = sub;
+
+        // 3. 開啟 BLE 通知
         await c.setNotifyValue(true);
 
-        final sub = c.lastValueStream.listen((value) async {
-          devLog('數據筆數原始數據', '接收到第 ${++_dataCount} 筆數據');
-          devLog('數據筆數原始數據', value.toString());
-
-          // 更新 UI 上顯示的原始值
-          final newNotifyValues = Map<Guid, List<int>>.from(
-            state.notifyValues,
-          );
-          newNotifyValues[c.uuid] = value;
-          state = state.copyWith(notifyValues: newNotifyValues);
-
-          // 數據處理（參考 data_match_service）
-          if (_healthCalculator != null && _currentDeviceId != null) {
-            await _processData(value);
-          }
-        });
-
-        _notifySubscriptions[c.uuid] = sub;
-        devLog('Notify', '✅ ${c.uuid} 已開啟監聽');
-
-        // ⭐ 時間同步已移至 _autoSubscribeFFF4()，在訂閱之前執行
-        // 這裡不再發送時間同步指令
+        devLog('Notify', '✅ ${c.uuid} 已開啟監聽 (獨立 Stream)');
       } catch (e) {
-        devLog('Notify', '開啟失敗: $e');
+        devLog('Notify', '開啟 ${c.uuid} 失敗: $e');
+        // 失敗時清理訂閱
+        await _notifySubscriptions[c.uuid]?.cancel();
+        _notifySubscriptions.remove(c.uuid);
       }
     }
   }
@@ -552,27 +614,42 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   }
 
   /// 廠商格式 Timestamp1：0xEA + TS1 TS2 TS3（4 bytes）
+  /// ✅ 使用台灣本地時間（UTC+8）
   Uint8List _getTimestamp1Command() {
-    final timestamp = DateTime.now().millisecondsSinceEpoch ~/ 10;
+    final now = DateTime.now();
+
+    // ✅ 轉換為本地時間戳（加上時區偏移）
+    int timestamp = now.millisecondsSinceEpoch;
+    timestamp += now.timeZoneOffset.inMilliseconds; // 加上 UTC+8 的偏移
+    timestamp = timestamp ~/ 10; // 轉換為 10ms 單位
 
     final command = Uint8List(4);
     command[0] = 0xEA; // Header
-    command[1] = (timestamp >> 0) & 0xFF; // TS1
+    command[1] = (timestamp >> 0) & 0xFF; // TS1 (低位元組)
     command[2] = (timestamp >> 8) & 0xFF; // TS2
     command[3] = (timestamp >> 16) & 0xFF; // TS3
 
+    devLog('時間同步', '本地時間: $now');
+    devLog('時間同步', '時區偏移: ${now.timeZoneOffset.inHours} 小時');
+    devLog('時間同步', '本地時間戳 (10ms): $timestamp');
     devLog('時間同步', 'Timestamp1 指令: $command');
     return command;
   }
 
   /// 廠商格式 Timestamp2：0xEB + TS4 TS5（3 bytes）
+  /// ✅ 使用台灣本地時間（UTC+8）
   Uint8List _getTimestamp2Command() {
-    final timestamp = DateTime.now().millisecondsSinceEpoch ~/ 10;
+    final now = DateTime.now();
+
+    // ✅ 轉換為本地時間戳（加上時區偏移）
+    int timestamp = now.millisecondsSinceEpoch;
+    timestamp += now.timeZoneOffset.inMilliseconds; // 加上 UTC+8 的偏移
+    timestamp = timestamp ~/ 10; // 轉換為 10ms 單位
 
     final command = Uint8List(3);
     command[0] = 0xEB; // Header
     command[1] = (timestamp >> 24) & 0xFF; // TS4
-    command[2] = (timestamp >> 32) & 0xFF; // TS5
+    command[2] = (timestamp >> 32) & 0xFF; // TS5 (高位元組)
 
     devLog('時間同步', 'Timestamp2 指令: $command');
     return command;
