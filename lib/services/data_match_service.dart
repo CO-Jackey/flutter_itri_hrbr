@@ -1635,44 +1635,44 @@ notifySubscriptions 數量: ${_notifySubscriptions.length}
               await Future.delayed(Duration(milliseconds: 300 * attempt));
             }
 
-            await c.setNotifyValue(true);
+            // await c.setNotifyValue(true);
 
-            final sub = c.lastValueStream.listen((value) async {
-              if (!_isConnected) return;
+            // final sub = c.lastValueStream.listen((value) async {
+            //   // if (!_isConnected) return;
 
-              devLog('原始數據', value.toString());
-              await _processAndUpsample(value);
+            //   // // devLog('原始數據', value.toString());
+            //   // // await _processAndUpsample(value);
 
-              final newNotifyValues = Map<Guid, List<int>>.from(
-                state.notifyValues,
-              );
-              newNotifyValues[c.uuid] = value;
-              state = state.copyWith(notifyValues: newNotifyValues);
-            });
+            //   // final newNotifyValues = Map<Guid, List<int>>.from(
+            //   //   state.notifyValues,
+            //   // );
+            //   // newNotifyValues[c.uuid] = value;
+            //   // state = state.copyWith(notifyValues: newNotifyValues);
+            // });
 
-            _notifySubscriptions[c.uuid] = sub;
-            devLog('啟用通知', '✅ 成功 - UUID: ${c.uuid}');
+            // _notifySubscriptions[c.uuid] = sub;
+            // devLog('啟用通知', '✅ 成功 - UUID: ${c.uuid}');
 
-            if (c.uuid.toString().toUpperCase().contains('FFF4')) {
-              await Future.delayed(const Duration(milliseconds: 200));
-              try {
-                final writeCharacteristic = state.services
-                    .expand((s) => s.characteristics)
-                    .firstWhere(
-                      (ch) => ch.uuid.toString().toUpperCase().contains('FFF5'),
-                    );
+            // if (c.uuid.toString().toUpperCase().contains('FFF4')) {
+            //   await Future.delayed(const Duration(milliseconds: 200));
+            //   try {
+            //     final writeCharacteristic = state.services
+            //         .expand((s) => s.characteristics)
+            //         .firstWhere(
+            //           (ch) => ch.uuid.toString().toUpperCase().contains('FFF5'),
+            //         );
 
-                if (writeCharacteristic.properties.write) {
-                  await writeCharacteristic.write(
-                    getTimeSyncCommand(),
-                    withoutResponse: false,
-                  );
-                  devLog('時間同步', '成功發送時間指令到 FFF5');
-                }
-              } catch (e) {
-                devLog('時間同步錯誤', '$e');
-              }
-            }
+            //     if (writeCharacteristic.properties.write) {
+            //       await writeCharacteristic.write(
+            //         getTimeSyncCommand(),
+            //         withoutResponse: false,
+            //       );
+            //       devLog('時間同步', '成功發送時間指令到 FFF5');
+            //     }
+            //   } catch (e) {
+            //     devLog('時間同步錯誤', '$e');
+            //   }
+            // }
 
             break;
           } catch (e) {

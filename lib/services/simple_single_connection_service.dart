@@ -79,6 +79,8 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   StreamSubscription<BluetoothConnectionState>? _connectionStateSubscription;
   final Map<Guid, StreamSubscription<List<int>>> _notifySubscriptions = {};
 
+  int _dataCount = 0;
+
   SimpleConnectionService(this.ref) : super(const SimpleConnectionState());
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -392,7 +394,8 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
         await c.setNotifyValue(true);
 
         final sub = c.lastValueStream.listen((value) async {
-          devLog('原始數據', value.toString());
+          devLog('數據筆數原始數據', '接收到第 ${++_dataCount} 筆數據');
+          devLog('數據筆數原始數據', value.toString());
 
           // 更新 UI 上顯示的原始值
           final newNotifyValues = Map<Guid, List<int>>.from(
@@ -553,10 +556,10 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     final timestamp = DateTime.now().millisecondsSinceEpoch ~/ 10;
 
     final command = Uint8List(4);
-    command[0] = 0xEA;  // Header
-    command[1] = (timestamp >> 0) & 0xFF;   // TS1
-    command[2] = (timestamp >> 8) & 0xFF;   // TS2
-    command[3] = (timestamp >> 16) & 0xFF;  // TS3
+    command[0] = 0xEA; // Header
+    command[1] = (timestamp >> 0) & 0xFF; // TS1
+    command[2] = (timestamp >> 8) & 0xFF; // TS2
+    command[3] = (timestamp >> 16) & 0xFF; // TS3
 
     devLog('時間同步', 'Timestamp1 指令: $command');
     return command;
@@ -567,9 +570,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     final timestamp = DateTime.now().millisecondsSinceEpoch ~/ 10;
 
     final command = Uint8List(3);
-    command[0] = 0xEB;  // Header
-    command[1] = (timestamp >> 24) & 0xFF;  // TS4
-    command[2] = (timestamp >> 32) & 0xFF;  // TS5
+    command[0] = 0xEB; // Header
+    command[1] = (timestamp >> 24) & 0xFF; // TS4
+    command[2] = (timestamp >> 32) & 0xFF; // TS5
 
     devLog('時間同步', 'Timestamp2 指令: $command');
     return command;
