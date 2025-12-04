@@ -7,6 +7,9 @@ import 'package:flutter_itri_hrbr/provider/health_provider.dart';
 import 'package:flutter_itri_hrbr/services/simple_single_connection_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+// ⭐ 測試功能（移除時註解掉此行）
+import 'package:flutter_itri_hrbr/ble_test/ble_test.dart';
+
 class SimpleConnectionViewPage extends ConsumerStatefulWidget {
   const SimpleConnectionViewPage({super.key});
 
@@ -237,6 +240,21 @@ class _SimpleConnectionViewPageState
             ),
             child: const Text('斷開藍芽裝置'),
           ),
+          
+          // ⭐ 測試功能 UI（移除時註解掉此區塊）
+          const SizedBox(height: 16),
+          ReSentTestWidget(
+            testService: service.testService,
+            isConnected: serviceState.isConnected,
+            onDisconnect: () => service.disconnectFromDevice(),
+            onReconnect: () => service.connectToDevice(serviceState.connectedDevice!),
+            onUnsubscribe: () => service.unsubscribeFFF4(),
+            lastDisconnectTime: service.lastDisconnectTime,
+            lastConnectTime: service.lastConnectTime,
+            lastTimeSyncWriteTime: service.lastTimeSyncWriteTime,
+          ),
+          // ⭐ 測試功能 UI 結束
+          
           const SizedBox(height: 8),
           serviceState.services.isEmpty
               ? const Center(child: Text('未發現服務'))

@@ -12,6 +12,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+// ⭐ 測試功能（移除時註解掉此行）
+import 'package:flutter_itri_hrbr/ble_test/ble_test.dart';
+
 // ═══════════════════════════════════════════════════════════════════════════
 // State 類別
 // ═══════════════════════════════════════════════════════════════════════════
@@ -82,6 +85,20 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   int _dataCount = 0;
   int _reSentDataCount = 0;
   int _currentDataCount = 0;
+
+  // ⭐ 測試功能（移除時註解掉此區塊）
+  final ReSentTestService _testService = ReSentTestService();
+  ReSentTestService get testService => _testService;
+  
+  // ⭐ 時間戳追蹤（用於除錯）
+  DateTime? _lastDisconnectTime;      // 上次斷線時間
+  DateTime? _lastConnectTime;         // 這次連線時間
+  DateTime? _lastTimeSyncWriteTime;   // 寫入 FFF5 的時間戳時間
+  
+  DateTime? get lastDisconnectTime => _lastDisconnectTime;
+  DateTime? get lastConnectTime => _lastConnectTime;
+  DateTime? get lastTimeSyncWriteTime => _lastTimeSyncWriteTime;
+  // ⭐ 測試功能結束
 
   SimpleConnectionService(this.ref) : super(const SimpleConnectionState());
 
@@ -156,10 +173,12 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
       (connectionState) {
         if (connectionState == BluetoothConnectionState.disconnected) {
           devLog('監聽器', '${device.platformName} 意外斷線');
+          // ⭐ 只在意外斷線時記錄（主動斷線已在 disconnectFromDevice 記錄）
+          _lastDisconnectTime ??= DateTime.now();
           _removeDeviceFromConnected();
         }
         if (connectionState == BluetoothConnectionState.connected) {
-          devLog('監聽器', '${device.platformName} 連線成功');
+          devLog('監聯器', '${device.platformName} 連線成功');
         }
       },
       onError: (error) {
@@ -176,6 +195,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
 
       // 💾 連線成功後，儲存監聽器（參考 muti）
       _connectionStateSubscription = subscription;
+      
+      // ⭐ 記錄連線時間
+      _lastConnectTime = DateTime.now();
 
       devLog('連線流程', '✅ 連線成功');
 
@@ -214,6 +236,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     final endTime = DateTime.now();
     try {
       devLog('斷線', '開始斷線...');
+      
+      // ⭐ 記錄斷線時間（在斷線開始時記錄）
+      _lastDisconnectTime = endTime;
 
       // 🔇 先取消連線狀態監聽器（參考 muti line 651-652）
       await _connectionStateSubscription?.cancel();
@@ -450,6 +475,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
 
             devLog('資料次數原始數據', '[Simple] ${c.uuid}: $value');
 
+            // ⭐ 測試功能：記錄測試資料（移除時註解掉此行）
+            _testService.recordTestData(value);
+
             // 更新 UI 上顯示的原始值
             final newNotifyValues = Map<Guid, List<int>>.from(
               state.notifyValues,
@@ -487,6 +515,27 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
       }
     }
   }
+
+  // ⭐ 測試功能：取消訂閱 FFF4（移除時註解掉此方法）
+  Future<void> unsubscribeFFF4() async {
+    try {
+      // 找出 FFF4 特徵
+      final fff4 = state.services
+          .expand((s) => s.characteristics)
+          .where((ch) => ch.uuid.toString().toUpperCase().contains('FFF4'))
+          .firstOrNull;
+
+      if (fff4 != null && _notifySubscriptions.containsKey(fff4.uuid)) {
+        await toggleNotify(fff4);
+        devLog('測試', '✅ 已取消訂閱 FFF4');
+      } else {
+        devLog('測試', '⚠️ FFF4 未訂閱或找不到');
+      }
+    } catch (e) {
+      devLog('測試', '取消訂閱 FFF4 失敗: $e');
+    }
+  }
+  // ⭐ 測試功能結束
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 數據處理（參考 data_match_service，但移除插值）
@@ -610,6 +659,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
           );
 
       if (writeCharacteristic.properties.write) {
+        // ⭐ 記錄寫入時間戳的時間
+        _lastTimeSyncWriteTime = DateTime.now();
+        
         // ⭐ 廠商格式：分兩次發送
         // 第一次：0xEA + TS1 TS2 TS3
         await writeCharacteristic.write(
@@ -617,6 +669,7 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
           withoutResponse: false,
         );
         devLog('時間同步', '✅ 已發送 Timestamp1 (0xEA) 到 FFF5');
+        devLog('時間同步', '⏱️ 寫入時間: $_lastTimeSyncWriteTime');
 
         // 等待裝置處理
         await Future.delayed(const Duration(milliseconds: 100));
@@ -728,6 +781,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     devLog('清理', '開始清理所有資源...');
 
     _connectionStateSubscription?.cancel();
+
+    // ⭐ 測試功能：清理測試服務（移除時註解掉此行）
+    _testService.dispose();
 
     for (var sub in _notifySubscriptions.values) {
       sub.cancel();
