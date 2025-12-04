@@ -5,6 +5,7 @@ import 'package:flutter_itri_hrbr/services/bluetooth_itri_service.dart';
 enum DataType {
   first,
   second,
+  reSent, // 補傳數據
   noise, // 過渡期雜訊
   unknown,
 }
@@ -26,6 +27,10 @@ class DataClassifierService {
       case FilterDecision.accepted:
         // 過濾器接受了，這明確是「第一組」數據
         return DataType.first;
+
+      case FilterDecision.reSent:
+        // 補傳數據被接受
+        return DataType.reSent;
 
       case FilterDecision.rejectedByPreFilter:
       case FilterDecision.rejectedByStableDrift:

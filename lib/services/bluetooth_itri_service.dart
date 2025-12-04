@@ -6,6 +6,9 @@ enum FilterDecision {
   /// 數據符合當前基準，被接受。
   accepted,
 
+  // ✅ 新增的決策類型：補傳數據被接受
+  reSent,
+
   /// 因不滿足 value13 < 5 等硬性預篩選規則而被拒絕。
   /// 這種數據明確不屬於第一組。
   rejectedByPreFilter,
@@ -67,6 +70,12 @@ class DynamicBaselineFilter {
   /// [array]: 來自數據源的原始數據列表。
   /// 返回: 一個 [FilterDecision] 枚舉，詳細說明判斷結果。
   FilterDecision filter(List<int> array) {
+    // 額外補傳機制新規定 - 標頭第一位數是0xFA => 250
+    // 有的話新增一個判斷視為補傳封包，直接接受
+    if (array.isNotEmpty && array[0] == 250) {
+      return FilterDecision.reSent;
+    }
+
     // 步驟 1: 預篩選 (硬規則)，過濾掉明確不符的數據。
     if (array.length < 13 || array[12] >= 5) {
       return FilterDecision.rejectedByPreFilter;

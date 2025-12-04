@@ -80,6 +80,8 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   final Map<Guid, StreamSubscription<List<int>>> _notifySubscriptions = {};
 
   int _dataCount = 0;
+  int _reSentDataCount = 0;
+  int _currentDataCount = 0;
 
   SimpleConnectionService(this.ref) : super(const SimpleConnectionState());
 
@@ -209,6 +211,7 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> disconnectFromDevice() async {
+    final endTime = DateTime.now();
     try {
       devLog('斷線', '開始斷線...');
 
@@ -226,6 +229,8 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
 
       // 🧹 清理該裝置的所有資源（參考 muti line 658）
       _removeDeviceFromConnected();
+
+      devLog('資料次數-斷線時間', endTime.toString());
 
       devLog('斷線', '✅ 已斷線');
     } catch (e) {
@@ -350,6 +355,7 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
       // ⭐ 步驟 1：先發送時間同步指令（在訂閱之前）
       devLog('[訂閱流程]', '⏱️ 發送時間同步指令...');
       await _sendTimeSyncCommand();
+      // await _sendTimeSyncCommand_OLD();
 
       // ⭐ 步驟 2：等待裝置處理時間同步
       await Future.delayed(const Duration(milliseconds: 300));
@@ -438,8 +444,7 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
               devLog('Notify', '⚠️ 收到資料但訂閱已取消，忽略');
               return;
             }
-
-
+            devLog('資料次數', '------Start of Data------');
             _dataCount++;
             devLog('資料次數原始數據', '收到資料次數: $_dataCount');
 
@@ -496,6 +501,17 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
         .read(filteredFirstRawDataProvider.notifier)
         .filterData(value, ref);
 
+    if (dataType == DataType.reSent) {
+      devLog('資料次數', '分類結果：🔄 補傳數據');
+      devLog('資料次數', '補傳次數: ${++_reSentDataCount}');
+    }
+
+    if (dataType == DataType.first) {
+      devLog('資料次數', '分類結果：✅ 第一組數據');
+      _currentDataCount++;
+      devLog('資料次數', '目前第一組數據次數: $_currentDataCount');
+    }
+
     if (dataType != DataType.first) {
       devLog('dataType', 'dataType = $dataType，忽略資料');
       return;
@@ -510,10 +526,14 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
 
     try {
       // 直接處理數據（不做插值）
-      await _healthCalculator!.splitPackage(
-        Uint8List.fromList(dataValue.splitRawData),
-        _currentDeviceId!,
-      );
+      await _healthCalculator!
+          .splitPackage(
+            Uint8List.fromList(dataValue.splitRawData),
+            _currentDeviceId!,
+          )
+          .then((_) {
+            devLog('資料次數', '------End of Data------');
+          });
 
       // 更新 healthDataProvider
       _updateHealthProvider();
@@ -629,6 +649,7 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     command[2] = (timestamp >> 8) & 0xFF; // TS2
     command[3] = (timestamp >> 16) & 0xFF; // TS3
 
+    devLog('資料次數-時間同步', '本地時間: $now');
     devLog('時間同步', '本地時間: $now');
     devLog('時間同步', '時區偏移: ${now.timeZoneOffset.inHours} 小時');
     devLog('時間同步', '本地時間戳 (10ms): $timestamp');
@@ -666,7 +687,7 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   //         .firstWhere(
   //           (ch) => ch.uuid.toString().toUpperCase().contains('FFF5'),
   //         );
-  //
+
   //     if (writeCharacteristic.properties.write) {
   //       await writeCharacteristic.write(
   //         _getTimeSyncCommand_OLD(),
