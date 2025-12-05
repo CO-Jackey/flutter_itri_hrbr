@@ -276,154 +276,16 @@ class _SimpleConnectionViewPageState
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildDisconnectedView() {
-    final serviceState = ref.watch(simpleConnectionServiceProvider);
-    final service = ref.read(simpleConnectionServiceProvider.notifier);
-    
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // ⭐ 重連狀態 UI
-        if (serviceState.isReconnecting) ...[
-          _buildReconnectStatusWidget(serviceState, service),
-          const SizedBox(height: 16),
-        ],
-        
-        // 掃描按鈕（重連失敗或未重連時顯示）
-        if (!serviceState.isReconnecting || 
-            serviceState.reconnectStatus == ReconnectStatus.failed)
-          ElevatedButton(
-            onPressed: () => _toggleScan(context),
-            child: const Text('掃描並連接藍牙裝置'),
-          ),
-        
-        // ⭐ 自動重連開關
-        const SizedBox(height: 16),
-        SwitchListTile(
-          title: const Text('自動重連'),
-          subtitle: const Text('斷線時自動嘗試重新連線'),
-          value: service.enableAutoReconnect,
-          onChanged: (value) {
-            service.setAutoReconnect(value);
-            setState(() {});
-          },
+        ElevatedButton(
+          onPressed: () => _toggleScan(context),
+          child: const Text('掃描並連接藍牙裝置'),
         ),
       ],
     );
   }
-  
-  /// 重連狀態 UI
-  Widget _buildReconnectStatusWidget(
-    SimpleConnectionState state,
-    SimpleConnectionService service,
-  ) {
-    // 根據狀態決定顏色
-    Color backgroundColor;
-    Color borderColor;
-    IconData statusIcon;
-    
-    switch (state.reconnectStatus) {
-      case ReconnectStatus.failed:
-        backgroundColor = Colors.red.shade50;
-        borderColor = Colors.red.shade200;
-        statusIcon = Icons.error;
-        break;
-      case ReconnectStatus.success:
-        backgroundColor = Colors.green.shade50;
-        borderColor = Colors.green.shade200;
-        statusIcon = Icons.check_circle;
-        break;
-      default:
-        backgroundColor = Colors.orange.shade50;
-        borderColor = Colors.orange.shade200;
-        statusIcon = _getStatusIcon(state.reconnectStatus);
-    }
-    
-    return Container(
-      padding: const EdgeInsets.all(16),
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: borderColor),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 狀態圖示 + 文字
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(statusIcon, size: 24),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  state.reconnectMessage,
-                  style: const TextStyle(fontSize: 16),
-                ),
-              ),
-            ],
-          ),
-          
-          const SizedBox(height: 8),
-          
-          // 進度顯示
-          Text(
-            '第 ${state.reconnectAttempts}/$_maxReconnectAttempts 次嘗試',
-            style: const TextStyle(fontSize: 14, color: Colors.grey),
-          ),
-          
-          // 倒數計時
-          if (state.reconnectStatus == ReconnectStatus.waiting &&
-              state.reconnectRemainingSeconds > 0) ...[
-            const SizedBox(height: 4),
-            Text(
-              '${state.reconnectRemainingSeconds} 秒後重試',
-              style: const TextStyle(fontSize: 14, color: Colors.grey),
-            ),
-          ],
-          
-          const SizedBox(height: 12),
-          
-          // 按鈕區
-          if (state.reconnectStatus == ReconnectStatus.failed)
-            // 失敗狀態：顯示重試按鈕
-            ElevatedButton(
-              onPressed: () => service.retryReconnect(),
-              child: const Text('重新連線'),
-            )
-          else
-            // 其他狀態：顯示取消按鈕
-            TextButton(
-              onPressed: () => service.cancelReconnect(),
-              child: const Text('取消重連'),
-            ),
-        ],
-      ),
-    );
-  }
-  
-  /// 根據重連狀態返回對應圖示
-  IconData _getStatusIcon(ReconnectStatus status) {
-    switch (status) {
-      case ReconnectStatus.quickRetry:
-        return Icons.flash_on;
-      case ReconnectStatus.scanning:
-        return Icons.bluetooth_searching;
-      case ReconnectStatus.connecting:
-        return Icons.link;
-      case ReconnectStatus.waiting:
-        return Icons.timer;
-      case ReconnectStatus.failed:
-        return Icons.error;
-      case ReconnectStatus.success:
-        return Icons.check_circle;
-      default:
-        return Icons.refresh;
-    }
-  }
-  
-  // 最大重連次數（與 service 保持一致）
-  static const int _maxReconnectAttempts = 5;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Build
