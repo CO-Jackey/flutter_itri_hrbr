@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_itri_hrbr/helper/devLog.dart';
 import 'package:flutter_itri_hrbr/provider/health_provider.dart';
@@ -17,28 +16,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_itri_hrbr/ble_test/ble_test.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 重連狀態枚舉
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// 重連狀態
-enum ReconnectStatus {
-  idle, // 未重連
-  quickRetry, // 階段1：快速重連中
-  scanning, // 階段2：掃描中
-  connecting, // 正在連線
-  waiting, // 等待下一次嘗試
-  failed, // 重連失敗（階段3）
-  success, // 重連成功
-}
-
-/// 重連階段
-enum ReconnectPhase {
-  none, // 無
-  quick, // 階段1：快速重連
-  scan, // 階段2：掃描重連
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // State 類別
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -49,27 +26,12 @@ class SimpleConnectionState {
   final Map<Guid, List<int>> notifyValues;
   final bool isScanning;
 
-  // ===== 重連相關欄位 =====
-  final bool isReconnecting;
-  final ReconnectStatus reconnectStatus;
-  final ReconnectPhase reconnectPhase;
-  final int reconnectAttempts;
-  final String reconnectMessage;
-  final int reconnectRemainingSeconds;
-
   const SimpleConnectionState({
     this.connectedDevice,
     this.services = const [],
     this.readValues = const {},
     this.notifyValues = const {},
     this.isScanning = false,
-    // ===== 重連相關欄位預設值 =====
-    this.isReconnecting = false,
-    this.reconnectStatus = ReconnectStatus.idle,
-    this.reconnectPhase = ReconnectPhase.none,
-    this.reconnectAttempts = 0,
-    this.reconnectMessage = '',
-    this.reconnectRemainingSeconds = 0,
   });
 
   bool get isConnected => connectedDevice != null;
@@ -81,13 +43,6 @@ class SimpleConnectionState {
     Map<Guid, List<int>>? notifyValues,
     bool? isScanning,
     bool clearDevice = false,
-    // ===== 重連相關欄位 =====
-    bool? isReconnecting,
-    ReconnectStatus? reconnectStatus,
-    ReconnectPhase? reconnectPhase,
-    int? reconnectAttempts,
-    String? reconnectMessage,
-    int? reconnectRemainingSeconds,
   }) {
     return SimpleConnectionState(
       connectedDevice: clearDevice
@@ -97,14 +52,6 @@ class SimpleConnectionState {
       readValues: readValues ?? this.readValues,
       notifyValues: notifyValues ?? this.notifyValues,
       isScanning: isScanning ?? this.isScanning,
-      // ===== 重連相關欄位 =====
-      isReconnecting: isReconnecting ?? this.isReconnecting,
-      reconnectStatus: reconnectStatus ?? this.reconnectStatus,
-      reconnectPhase: reconnectPhase ?? this.reconnectPhase,
-      reconnectAttempts: reconnectAttempts ?? this.reconnectAttempts,
-      reconnectMessage: reconnectMessage ?? this.reconnectMessage,
-      reconnectRemainingSeconds:
-          reconnectRemainingSeconds ?? this.reconnectRemainingSeconds,
     );
   }
 }
@@ -153,56 +100,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   DateTime? get lastTimeSyncWriteTime => _lastTimeSyncWriteTime;
   // ⭐ 測試功能結束
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // 自動重連相關
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  /// 控制是否啟用自動重連（對外暴露）
-  bool enableAutoReconnect = true;
-
-  /// 是否為主動斷線（主動斷線不觸發自動重連）
-  bool _isIntentionalDisconnect = false;
-
-  /// 防止重複清理資源的旗標
-  bool _isCleaningUp = false;
-
-  /// 是否正在進行連線中（防止重連流程干擾）
-  bool _isConnecting = false;
-
-  /// 上次連線的裝置（用於重連）
-  BluetoothDevice? _lastConnectedDevice;
-
-  /// 上次的服務 UUIDs（用於重連時的掃描過濾）
-  List<Guid> _lastConnectedServiceUuids = [];
-
-  // 重連計數器
-  int _reconnectAttempts = 0;
-  int _connectionErrorRetries = 0;
-
-  // 重連計時器
-  Timer? _reconnectTimer;
-  Timer? _countdownTimer;
-  StreamSubscription<List<ScanResult>>? _reconnectScanSubscription;
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // 重連參數配置
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  // 階段1：快速重連參數
-  static const int _quickReconnectAttempts = 2; // 快速重連嘗試次數
-  static const int _quickReconnectTimeout = 3; // 快速重連超時（秒）
-  static const int _quickReconnectInterval = 2; // 快速重連間隔（秒）
-
-  // 階段2：掃描重連參數
-  static const int _scanReconnectAttempts = 3; // 掃描重連嘗試次數
-  static const List<int> _scanDurations = [10, 15, 20]; // 掃描時間（秒）
-  static const List<int> _scanIntervals = [3, 5, 8]; // 掃描間隔（秒）
-
-  // 總計最大嘗試次數
-  static const int _maxReconnectAttempts = 5; // 2 + 3 = 5 次
-
-  // 連線錯誤額外機會
-  static const int _maxConnectionErrorRetries = 2; // 連線錯誤額外嘗試次數
+  // Debug 計數器
+  int _connectAttempts = 0;
+  int _disconnectAttempts = 0;
 
   SimpleConnectionService(this.ref) : super(const SimpleConnectionState());
 
@@ -272,19 +172,23 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
       return false;
     }
 
-    // 🔒 防止連線過程中被重連流程干擾
-    if (_isConnecting) {
-      devLog('連線', '⚠️ 已在連線中，忽略重複連線請求');
-      return false;
-    }
-    _isConnecting = true;
-
-    // 重置主動斷線標記（新連線開始）
-    _isIntentionalDisconnect = false;
-
-    // ⭐ 先取消之前的監聽器，避免重複監聽
-    await _connectionStateSubscription?.cancel();
-    _connectionStateSubscription = null;
+    // 🎧 先建立連線狀態監聽器（參考 muti 的做法）
+    final subscription = device.connectionState.listen(
+      (connectionState) {
+        if (connectionState == BluetoothConnectionState.disconnected) {
+          devLog('監聽器', '${device.platformName} 意外斷線');
+          // ⭐ 只在意外斷線時記錄（主動斷線已在 disconnectFromDevice 記錄）
+          _lastDisconnectTime ??= DateTime.now();
+          _removeDeviceFromConnected();
+        }
+        if (connectionState == BluetoothConnectionState.connected) {
+          devLog('監聯器', '${device.platformName} 連線成功');
+        }
+      },
+      onError: (error) {
+        devLog('連線', '連線狀態監聽錯誤: $error');
+      },
+    );
 
     try {
       // 🔗 嘗試連線（15 秒超時）
@@ -293,40 +197,11 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
         autoConnect: false,
       );
 
-      // ⭐ 連線成功後才建立監聽器（避免在連線過程中收到 disconnected 事件）
-      final subscription = device.connectionState.listen(
-        (connectionState) {
-          // ⚠️ 連線過程中忽略事件
-          if (_isConnecting) return;
-
-          if (connectionState == BluetoothConnectionState.disconnected) {
-            devLog('監聽器', '${device.platformName} 意外斷線');
-            _lastDisconnectTime ??= DateTime.now();
-            _removeDeviceFromConnected();
-
-            // ⭐ 觸發自動重連（如果不是主動斷線且啟用了自動重連）
-            if (!_isIntentionalDisconnect && enableAutoReconnect) {
-              devLog('重連', '🔄 偵測到意外斷線，啟動自動重連...');
-              _handleUnexpectedDisconnect(device);
-            }
-          }
-          if (connectionState == BluetoothConnectionState.connected) {
-            devLog('監聯器', '${device.platformName} 連線成功');
-          }
-        },
-        onError: (error) {
-          devLog('連線', '連線狀態監聯錯誤: $error');
-        },
-      );
-
       // 💾 連線成功後，儲存監聽器（參考 muti）
       _connectionStateSubscription = subscription;
 
       // ⭐ 記錄連線時間
       _lastConnectTime = DateTime.now();
-
-      // ⭐ 記錄裝置資訊（用於自動重連）
-      _lastConnectedDevice = device;
 
       devLog('連線流程', '✅ 連線成功');
 
@@ -347,42 +222,12 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
       // ✅ 自動訂閱 FFF4（參考 muti_view_mac_page._autoSubscribeFFF4）
       await _autoSubscribeFFF4(device, svcs);
 
-      // ⭐ 如果是重連成功，更新狀態並重置計數器
-      if (state.isReconnecting) {
-        devLog('重連', '✅ 重連成功！');
-        _reconnectAttempts = 0;
-        _connectionErrorRetries = 0;
-        _stopCountdown();
-        _cancelReconnectTimer();
-        state = state.copyWith(
-          isReconnecting: false,
-          reconnectStatus: ReconnectStatus.success,
-          reconnectMessage: '重連成功！',
-          reconnectPhase: ReconnectPhase.none,
-        );
-        // 2 秒後重置狀態
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) {
-            state = state.copyWith(
-              reconnectStatus: ReconnectStatus.idle,
-              reconnectMessage: '',
-            );
-          }
-        });
-      }
-
       devLog('連線流程', '✅ 成功連線到 ${device.platformName}');
-
-      // ⭐ 連線完成，重置旗標
-      _isConnecting = false;
       return true;
     } catch (e) {
       devLog('連線', '連線到 ${device.platformName} 失敗: $e');
-      // ⚠️ 連線失敗，清理監聽器
-      await _connectionStateSubscription?.cancel();
-      _connectionStateSubscription = null;
-      // ⭐ 連線完成（失敗），重置旗標
-      _isConnecting = false;
+      // ⚠️ 連線失敗才取消監聽器（參考 muti）
+      await subscription.cancel();
       return false;
     }
   }
@@ -396,14 +241,8 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     try {
       devLog('斷線', '開始斷線...');
 
-      // ⭐ 標記為主動斷線（不觸發自動重連）
-      _isIntentionalDisconnect = true;
-
       // ⭐ 記錄斷線時間（在斷線開始時記錄）
       _lastDisconnectTime = endTime;
-
-      // ⭐ 記錄裝置資訊（用於手動重連）
-      _lastConnectedDevice = state.connectedDevice;
 
       // 🔇 先取消連線狀態監聽器（參考 muti line 651-652）
       await _connectionStateSubscription?.cancel();
@@ -475,19 +314,8 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   // 清理資源（參考 muti_mac_view_service）
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<void> _removeDeviceFromConnected() async {
-    // ⭐ 防止重複清理
-    if (_isCleaningUp) {
-      devLog('清理', '⚠️ 已在清理中，跳過重複清理');
-      return;
-    }
-    _isCleaningUp = true;
-
+  void _removeDeviceFromConnected() {
     devLog('清理', '開始清理資源...');
-
-    // ⭐ 先取消監聽器，避免清理過程中再次觸發
-    _connectionStateSubscription?.cancel();
-    _connectionStateSubscription = null;
 
     // ✅ 修正：參考 muti _removeDeviceFromConnected (Line 735-739)
     // 需要呼叫 SDK dispose 以正確釋放資源
@@ -498,13 +326,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     _healthCalculator = null;
     _currentDeviceId = null;
 
-    // ⭐ 關鍵修正：取消所有 notify 訂閱（避免重連後收到雙倍資料）
-    // 注意：必須先 cancel 再 clear，否則舊的 subscription 會繼續監聽
-    for (final sub in _notifySubscriptions.values) {
-      await sub.cancel();
-    }
+    // 注意：notify 訂閱已在 _stopAllNotifications() 中清理
+    // 這裡只做備用清理（處理意外斷線的情況）
     _notifySubscriptions.clear();
-    devLog('清理', '✅ 已取消所有 notify 訂閱');
 
     // 重置狀態
     state = state.copyWith(
@@ -514,10 +338,12 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
       notifyValues: {},
     );
 
-    devLog('清理', '✅ 資源清理完成');
+    // 🔇 取消連線監聽（參考 muti Line 763-765）
+    // 注意：這裡需要保留，因為意外斷線時會直接呼叫此方法
+    _connectionStateSubscription?.cancel();
+    _connectionStateSubscription = null;
 
-    // ⭐ 清理完成，重置旗標
-    _isCleaningUp = false;
+    devLog('清理', '✅ 資源清理完成');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -563,9 +389,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
       // ⭐ 步驟 2：等待裝置處理時間同步
       await Future.delayed(const Duration(milliseconds: 300));
 
-      // ⭐ 步驟 3：訂閱 fff4 特徵（改用 subscribeNotify 確保是開啟而非切換）
+      // ⭐ 步驟 3：訂閱 fff4 特徵
       devLog('[訂閱流程]', '📡 開始訂閱 fff4...');
-      await subscribeNotify(fff4Char);
+      await toggleNotify(fff4Char);
 
       // 驗證訂閱狀態
       final isSubscribed = isNotifying(fff4Char.uuid);
@@ -647,9 +473,9 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
               devLog('Notify', '⚠️ 收到資料但訂閱已取消，忽略');
               return;
             }
-            // devLog('資料次數', '------Start of Data------');
+            devLog('資料次數', '------Start of Data------');
             _dataCount++;
-            // devLog('資料次數原始數據', '收到資料次數: $_dataCount');
+            devLog('資料次數原始數據', '收到資料次數: $_dataCount');
 
             devLog('資料次數原始數據', '[Simple] ${c.uuid}: $value');
 
@@ -694,71 +520,6 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     }
   }
 
-  /// 開啟通知（非切換，確保是開啟狀態）
-  /// 用於自動重連後重新訂閱
-  Future<void> subscribeNotify(BluetoothCharacteristic c) async {
-    // 如果已經在訂閱中，先取消
-    if (_notifySubscriptions.containsKey(c.uuid)) {
-      devLog('Notify', '⚠️ ${c.uuid} 已在訂閱中，先取消舊訂閱');
-      await _notifySubscriptions[c.uuid]?.cancel();
-      _notifySubscriptions.remove(c.uuid);
-      try {
-        await c.setNotifyValue(false);
-      } catch (e) {
-        // 忽略錯誤（裝置可能已斷線）
-      }
-      await Future.delayed(const Duration(milliseconds: 100));
-    }
-
-    // 開啟訂閱
-    try {
-      // 1. 先建立獨立的 Stream 訂閱
-      final sub = c.onValueReceived.listen(
-        (value) async {
-          if (!_notifySubscriptions.containsKey(c.uuid)) {
-            devLog('Notify', '⚠️ 收到資料但訂閱已取消，忽略');
-            return;
-          }
-          _dataCount++;
-          devLog('資料次數原始數據', '[Simple] ${c.uuid}: $value');
-
-          // ⭐ 測試功能：記錄測試資料
-          _testService.recordTestData(value);
-
-          // 更新 UI 上顯示的原始值
-          final newNotifyValues = Map<Guid, List<int>>.from(state.notifyValues);
-          newNotifyValues[c.uuid] = value;
-          state = state.copyWith(notifyValues: newNotifyValues);
-
-          // 數據處理
-          if (_healthCalculator != null && _currentDeviceId != null) {
-            await _processData(value);
-          }
-        },
-        onError: (error) {
-          devLog('Notify', '❌ ${c.uuid} 接收資料錯誤: $error');
-        },
-        onDone: () {
-          devLog('Notify', '🔇 ${c.uuid} Stream 已結束');
-          _notifySubscriptions.remove(c.uuid);
-        },
-        cancelOnError: false,
-      );
-
-      // 2. 儲存訂閱
-      _notifySubscriptions[c.uuid] = sub;
-
-      // 3. 開啟 BLE 通知
-      await c.setNotifyValue(true);
-
-      devLog('Notify', '✅ ${c.uuid} 已開啟監聽');
-    } catch (e) {
-      devLog('Notify', '開啟 ${c.uuid} 失敗: $e');
-      await _notifySubscriptions[c.uuid]?.cancel();
-      _notifySubscriptions.remove(c.uuid);
-    }
-  }
-
   // ⭐ 測試功能：取消訂閱 FFF4（移除時註解掉此方法）
   Future<void> unsubscribeFFF4() async {
     try {
@@ -794,13 +555,14 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
         .filterData(value, ref);
 
     if (dataType == DataType.reSent) {
-      // devLog('資料次數', '分類結果：🔄 補傳數據');
+      devLog('資料次數', '分類結果：🔄 補傳數據');
       devLog('資料次數', '補傳次數: ${++_reSentDataCount}');
     }
 
     if (dataType == DataType.first) {
-      // devLog('資料次數', '分類結果：✅ 第一組數據');
-      devLog('資料次數', '目前第一組數據次數: ${++_currentDataCount}');
+      devLog('資料次數', '分類結果：✅ 第一組數據');
+      _currentDataCount++;
+      devLog('資料次數', '目前第一組數據次數: $_currentDataCount');
     }
 
     if (dataType != DataType.first) {
@@ -823,7 +585,7 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
             _currentDeviceId!,
           )
           .then((_) {
-            // devLog('資料次數', '------End of Data------');
+            devLog('資料次數', '------End of Data------');
           });
 
       // 更新 healthDataProvider
@@ -1016,428 +778,29 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
   // }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 自動重連功能
+  // Debug：取得當前狀態
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /// 設定是否啟用自動重連
-  void setAutoReconnect(bool enabled) {
-    enableAutoReconnect = enabled;
-    devLog('重連', '自動重連已${enabled ? '啟用' : '停用'}');
-  }
-
-  /// 手動取消重連
-  void cancelReconnect() {
-    devLog('重連', '🛑 手動取消重連');
-    _cancelReconnectTimer();
-    _stopCountdown();
-    _reconnectScanSubscription?.cancel();
-    _reconnectScanSubscription = null;
-    FlutterBluePlus.stopScan();
-
-    _reconnectAttempts = 0;
-    _connectionErrorRetries = 0;
-
-    state = state.copyWith(
-      isReconnecting: false,
-      reconnectStatus: ReconnectStatus.idle,
-      reconnectPhase: ReconnectPhase.none,
-      reconnectAttempts: 0,
-      reconnectMessage: '',
-      reconnectRemainingSeconds: 0,
-    );
-  }
-
-  /// 手動觸發重連（階段3 失敗後使用）
-  void retryReconnect() {
-    if (_lastConnectedDevice == null) {
-      devLog('重連', '⚠️ 沒有上次連線的裝置資訊，無法重連');
-      return;
-    }
-
-    devLog('重連', '🔄 手動觸發重連...');
-    _reconnectAttempts = 0;
-    _connectionErrorRetries = 0;
-    _handleUnexpectedDisconnect(_lastConnectedDevice!);
-  }
-
-  /// 處理意外斷線
-  void _handleUnexpectedDisconnect(BluetoothDevice device) {
-    // 記錄上次連線的裝置
-    _lastConnectedDevice = device;
-
-    // 更新狀態
-    state = state.copyWith(
-      isReconnecting: true,
-      reconnectStatus: ReconnectStatus.waiting,
-      reconnectPhase: ReconnectPhase.quick,
-      reconnectAttempts: 0,
-      reconnectMessage: '準備重連...',
-    );
-
-    // 等待 2 秒後開始重連
-    _startCountdown(_quickReconnectInterval, () {
-      _startQuickReconnect();
-    });
-  }
-
-  /// 階段1：快速重連（不掃描）
-  Future<void> _startQuickReconnect() async {
-    if (!enableAutoReconnect || _lastConnectedDevice == null) {
-      cancelReconnect();
-      return;
-    }
-
-    devLog(
-      '重連',
-      '📍 階段1：快速重連 (${_reconnectAttempts + 1}/$_quickReconnectAttempts)',
-    );
-
-    state = state.copyWith(
-      reconnectStatus: ReconnectStatus.quickRetry,
-      reconnectPhase: ReconnectPhase.quick,
-      reconnectAttempts: _reconnectAttempts + 1,
-      reconnectMessage:
-          '快速重連中... (${_reconnectAttempts + 1}/$_quickReconnectAttempts)',
-    );
-
-    try {
-      // 嘗試使用 iOS 幽靈連線或直接連線
-      final device = _lastConnectedDevice!;
-
-      // iOS 特有：嘗試取回系統層的連線
-      if (Platform.isIOS) {
-        final systemDevice = await _tryRetrieveSystemConnectedDevice(
-          device.remoteId.str,
-        );
-        if (systemDevice != null) {
-          devLog('重連', '🔗 找到系統層幽靈連線，直接使用');
-          final success = await connectToDevice(systemDevice);
-          if (success) {
-            _onReconnectSuccess();
-            return;
-          }
-        }
-      }
-
-      // 直接嘗試連線（使用 fromId）
-      state = state.copyWith(
-        reconnectStatus: ReconnectStatus.connecting,
-        reconnectMessage: '正在連線...',
-      );
-
-      final directDevice = BluetoothDevice.fromId(device.remoteId.str);
-
-      // ⭐ 統一使用 connectToDevice()，避免流程衝突
-      final success = await connectToDevice(directDevice);
-      if (success) {
-        _onReconnectSuccess();
-        return;
-      }
-    } catch (e) {
-      devLog('重連', '❌ 快速重連失敗: $e');
-    }
-
-    _reconnectAttempts++;
-
-    // 檢查是否還有快速重連機會
-    if (_reconnectAttempts < _quickReconnectAttempts) {
-      // 等待後再試
-      state = state.copyWith(
-        reconnectStatus: ReconnectStatus.waiting,
-        reconnectMessage: '等待重試...',
-      );
-      _startCountdown(_quickReconnectInterval, () {
-        _startQuickReconnect();
-      });
-    } else {
-      // 進入階段2：掃描重連
-      devLog('重連', '📍 進入階段2：掃描重連');
-      _reconnectAttempts = 0;
-      _startScanReconnect();
-    }
-  }
-
-  /// 階段2：掃描重連
-  Future<void> _startScanReconnect() async {
-    if (!enableAutoReconnect || _lastConnectedDevice == null) {
-      cancelReconnect();
-      return;
-    }
-
-    final scanIndex = _reconnectAttempts;
-    if (scanIndex >= _scanReconnectAttempts) {
-      // 階段2 也失敗了，進入階段3
-      _enterFailedState();
-      return;
-    }
-
-    final scanDuration = _scanDurations[scanIndex];
-    final scanInterval = _scanIntervals[scanIndex];
-
-    devLog(
-      '重連',
-      '📡 階段2：掃描重連 (${scanIndex + 1}/$_scanReconnectAttempts) - 掃描 $scanDuration 秒',
-    );
-
-    state = state.copyWith(
-      reconnectStatus: ReconnectStatus.scanning,
-      reconnectPhase: ReconnectPhase.scan,
-      reconnectAttempts: _quickReconnectAttempts + scanIndex + 1,
-      reconnectMessage: '掃描裝置中... (${scanIndex + 1}/$_scanReconnectAttempts)',
-    );
-
-    bool deviceFound = false;
-
-    // 開始掃描
-    _reconnectScanSubscription?.cancel();
-    _reconnectScanSubscription = FlutterBluePlus.scanResults.listen((
-      results,
-    ) async {
-      if (deviceFound) return;
-
-      for (final result in results) {
-        if (result.device.remoteId.str == _lastConnectedDevice!.remoteId.str) {
-          deviceFound = true;
-          devLog('重連', '✅ 找到目標裝置！');
-
-          // 停止掃描
-          await FlutterBluePlus.stopScan();
-          _reconnectScanSubscription?.cancel();
-
-          // 嘗試連線
-          state = state.copyWith(
-            reconnectStatus: ReconnectStatus.connecting,
-            reconnectMessage: '正在連線...',
-          );
-
-          final success = await connectToDevice(result.device);
-          if (success) {
-            _onReconnectSuccess();
-          } else {
-            // 連線失敗，但裝置有找到（可能是連線錯誤）
-            _connectionErrorRetries++;
-            if (_connectionErrorRetries < _maxConnectionErrorRetries) {
-              devLog(
-                '重連',
-                '⚠️ 連線失敗，額外重試 ($_connectionErrorRetries/$_maxConnectionErrorRetries)',
-              );
-              // 短暫等待後直接重試這次掃描
-              await Future.delayed(const Duration(seconds: 2));
-              _startScanReconnect();
-            } else {
-              _reconnectAttempts++;
-              _connectionErrorRetries = 0;
-              _handleScanReconnectFailure(scanInterval);
-            }
-          }
-          return;
-        }
-      }
-    });
-
-    // 開始掃描
-    await FlutterBluePlus.startScan(
-      timeout: Duration(seconds: scanDuration),
-    );
-
-    // 等待掃描完成
-    await Future.delayed(Duration(seconds: scanDuration + 1));
-
-    // 如果沒有找到裝置
-    if (!deviceFound) {
-      devLog('重連', '⚠️ 掃描完成，未找到裝置');
-      _reconnectScanSubscription?.cancel();
-      _reconnectAttempts++;
-      _handleScanReconnectFailure(scanInterval);
-    }
-  }
-
-  /// 處理掃描重連失敗
-  void _handleScanReconnectFailure(int interval) {
-    if (_reconnectAttempts >= _scanReconnectAttempts) {
-      _enterFailedState();
-    } else {
-      state = state.copyWith(
-        reconnectStatus: ReconnectStatus.waiting,
-        reconnectMessage: '等待下一次掃描...',
-      );
-      _startCountdown(interval, () {
-        _startScanReconnect();
-      });
-    }
-  }
-
-  /// 進入失敗狀態（階段3）
-  void _enterFailedState() {
-    devLog('重連', '❌ 階段3：所有重連嘗試都失敗');
-
-    state = state.copyWith(
-      isReconnecting: true, // 保持 true 以顯示失敗 UI
-      reconnectStatus: ReconnectStatus.failed,
-      reconnectPhase: ReconnectPhase.none,
-      reconnectMessage: '連線失敗，請確認裝置在範圍內',
-      reconnectRemainingSeconds: 0,
-    );
-  }
-
-  /// 重連成功的統一處理
-  void _onReconnectSuccess() {
-    devLog('重連', '✅ 重連成功！');
-    _reconnectAttempts = 0;
-    _connectionErrorRetries = 0;
-    _stopCountdown();
-    _cancelReconnectTimer();
-    _reconnectScanSubscription?.cancel();
-    _reconnectScanSubscription = null;
-
-    state = state.copyWith(
-      isReconnecting: false,
-      reconnectStatus: ReconnectStatus.success,
-      reconnectMessage: '重連成功！',
-      reconnectPhase: ReconnectPhase.none,
-    );
-
-    // 2 秒後重置狀態
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        state = state.copyWith(
-          reconnectStatus: ReconnectStatus.idle,
-          reconnectMessage: '',
-        );
-      }
-    });
-  }
-
-  // ⚠️ 以下為舊的 _completeReconnection，已棄用（保留供參考）
-  // 問題：與 connectToDevice() 的流程重複，導致 FFF4 訂閱衝突
-  /*
-  /// 完成重連流程（快速重連成功後）
-  Future<void> _completeReconnection(BluetoothDevice device) async {
-    devLog('重連', '🔄 完成重連流程...');
-
-    try {
-      // 建立連線監聽器
-      _connectionStateSubscription?.cancel();
-      _connectionStateSubscription = device.connectionState.listen(
-        (connectionState) {
-          if (connectionState == BluetoothConnectionState.disconnected) {
-            devLog('監聽器', '${device.platformName} 意外斷線');
-            _lastDisconnectTime ??= DateTime.now();
-            _removeDeviceFromConnected();
-
-            if (!_isIntentionalDisconnect && enableAutoReconnect) {
-              devLog('重連', '🔄 偵測到意外斷線，啟動自動重連...');
-              _handleUnexpectedDisconnect(device);
-            }
-          }
-        },
-      );
-
-      // 記錄時間
-      _lastConnectTime = DateTime.now();
-      _lastConnectedDevice = device;
-
-      // 發現服務
-      final svcs = await device.discoverServices();
-      devLog('服務', '已發現 ${device.platformName} 的 ${svcs.length} 個服務');
-
-      // 初始化 SDK
-      _currentDeviceId = device.remoteId.str;
-      _healthCalculator = HealthCalculateDeviceID(3);
-
-      // 更新狀態
-      state = state.copyWith(
-        connectedDevice: device,
-        services: svcs,
-      );
-
-      // 自動訂閱 FFF4
-      await _autoSubscribeFFF4(device, svcs);
-
-      // 重連成功
-      devLog('重連', '✅ 重連成功！');
-      _reconnectAttempts = 0;
-      _connectionErrorRetries = 0;
-      _stopCountdown();
-      _cancelReconnectTimer();
-
-      state = state.copyWith(
-        isReconnecting: false,
-        reconnectStatus: ReconnectStatus.success,
-        reconnectMessage: '重連成功！',
-        reconnectPhase: ReconnectPhase.none,
-      );
-
-      // 2 秒後重置狀態
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          state = state.copyWith(
-            reconnectStatus: ReconnectStatus.idle,
-            reconnectMessage: '',
-          );
-        }
-      });
-    } catch (e) {
-      devLog('重連', '❌ 完成重連流程失敗: $e');
-      // 繼續重連流程
-      _reconnectAttempts++;
-      if (_reconnectAttempts < _quickReconnectAttempts) {
-        _startQuickReconnect();
-      } else {
-        _reconnectAttempts = 0;
-        _startScanReconnect();
-      }
-    }
-  }
-  */
-
-  /// iOS 專用：嘗試取回系統層的連線
-  Future<BluetoothDevice?> _tryRetrieveSystemConnectedDevice(
-    String deviceId,
-  ) async {
-    try {
-      final connectedDevices = await FlutterBluePlus.systemDevices([]);
-      for (final device in connectedDevices) {
-        if (device.remoteId.str == deviceId) {
-          return device;
-        }
-      }
-    } catch (e) {
-      devLog('重連', '取回系統連線失敗: $e');
-    }
-    return null;
-  }
-
-  /// 啟動倒數計時
-  void _startCountdown(int seconds, VoidCallback onComplete) {
-    _stopCountdown();
-
-    int remaining = seconds;
-    state = state.copyWith(reconnectRemainingSeconds: remaining);
-
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      remaining--;
-      if (remaining <= 0) {
-        timer.cancel();
-        state = state.copyWith(reconnectRemainingSeconds: 0);
-        onComplete();
-      } else {
-        state = state.copyWith(reconnectRemainingSeconds: remaining);
-      }
-    });
-  }
-
-  /// 停止倒數計時
-  void _stopCountdown() {
-    _countdownTimer?.cancel();
-    _countdownTimer = null;
-  }
-
-  /// 取消重連計時器
-  void _cancelReconnectTimer() {
-    _reconnectTimer?.cancel();
-    _reconnectTimer = null;
-  }
+//   void printDebugStatus() {
+//     devLog('DEBUG', '''
+// ══════════════════════════════════════
+// 連線嘗試次數: $_connectAttempts
+// 斷線嘗試次數: $_disconnectAttempts
+// 重連嘗試次數: $_reconnectAttempts / $_maxReconnectAttempts
+// 重連階段: ${state.reconnectPhase}  // ⭐ 加這行
+// _isConnecting: $_isConnecting
+// _isConnected: $_isConnected
+// _isDisconnecting: $_isDisconnecting
+// _isIntentionalDisconnect: $_isIntentionalDisconnect
+// state.isConnected: ${state.isConnected}
+// connectedDevice: ${state.connectedDevice?.platformName ?? 'null'}
+// lastConnectedDevice: ${_lastConnectedDevice?.platformName ?? 'null'}
+// services 數量: ${state.services.length}
+// notifySubscriptions 數量: ${_notifySubscriptions.length}
+// 最後連線時間: $_lastConnectedTime
+// ══════════════════════════════════════
+//     ''');
+//   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 清理
@@ -1447,12 +810,6 @@ class SimpleConnectionService extends StateNotifier<SimpleConnectionState> {
     devLog('清理', '開始清理所有資源...');
 
     _connectionStateSubscription?.cancel();
-
-    // ⭐ 清理重連相關資源
-    _cancelReconnectTimer();
-    _stopCountdown();
-    _reconnectScanSubscription?.cancel();
-    _reconnectScanSubscription = null;
 
     // ⭐ 測試功能：清理測試服務（移除時註解掉此行）
     _testService.dispose();

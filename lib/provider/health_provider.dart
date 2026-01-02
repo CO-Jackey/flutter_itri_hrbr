@@ -115,6 +115,12 @@ class HealthDataNotifier extends StateNotifier<HealthData> {
         .classify(Uint8List.fromList(splitRawData));
 
     switch (dataType) {
+      case DataType.reSent:
+        devLog('filterData', "分類結果：🔄 補傳數據 -> $splitRawData");
+        ref
+            .read(filteredFirstRawDataProvider.notifier)
+            .normalUpdate(splitRawData: splitRawData);
+        break;
       case DataType.first:
         devLog('filterData', "分類結果：✅ 第一組 -> $splitRawData");
         ref
@@ -158,6 +164,12 @@ class HealthDataNotifier extends StateNotifier<HealthData> {
         .classify(Uint8List.fromList(splitRawData));
 
     switch (dataType) {
+      case DataType.reSent:
+        devLog('filterData', "裝置ID: $deviceId, 分類結果：🔄 補傳數據 -> $splitRawData");
+        ref
+            .read(mutiFilteredFirstRawDataFamily(deviceId).notifier)
+            .normalUpdate(splitRawData: splitRawData);
+        break;
       case DataType.first:
         devLog('filterData', "裝置ID: $deviceId, 分類結果：✅ 第一組 -> $splitRawData");
         ref
